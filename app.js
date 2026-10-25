@@ -12,8 +12,8 @@
   if (tg) {
     tg.ready();
     tg.expand();
-    tg.setHeaderColor?.('#060a12');
-    tg.setBackgroundColor?.('#060a12');
+    tg.setHeaderColor?.('#090a0f');
+    tg.setBackgroundColor?.('#090a0f');
     if (tg.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes?.();
   }
 
@@ -59,7 +59,6 @@
     const bucket = Math.floor(Date.now() / (12 * 60 * 60 * 1000));
     return messages[hashSeed(viewer.id, bucket, barnumOffset) % messages.length];
   };
-  const BARNUM_COUNT = 16;
   const barnumPrediction = (viewer) => {
     const predictions = [
       'Вы долго держали в голове одно решение, выжидая подходящий момент — сегодня обстоятельства сами подскажут простой и верный шаг.',
@@ -90,7 +89,7 @@
     if (code.startsWith('s2')) return 'Reserve · Испания 🇪🇸';
     if (code.startsWith('s1')) return 'Reserve · Польша 🇵🇱';
     if (code) return code.toUpperCase();
-    return inactive ? 'ОЖИДАЕТ' : '—';
+    return inactive ? 'Ожидает' : '—';
   };
 
   const API_BASES = window.location.hostname.endsWith('github.io')
@@ -155,7 +154,6 @@
     $('sheet').classList.remove('open');
   }
 
-  // Vaul-style 1:1 drag-to-dismiss on sheet handle zone (works smoothly on Android & iOS)
   function initSheetDrag() {
     const zone = $('sheet-drag-zone');
     const sheet = $('sheet');
@@ -244,33 +242,6 @@
   const fmtDateTime = (seconds) => seconds ? new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(seconds*1000)) : '';
   const openExternal = (url) => { if (tg?.openLink) tg.openLink(url); else window.open(url, '_blank'); };
 
-  function updateHeroRing(sub, inactive) {
-    const ring = $('days-ring-progress');
-    const ringLabel = $('ring-percent');
-    if (!ring) return;
-    const circumference = 226.2;
-    const days = sub.status === 'frozen' ? Math.ceil((sub.frozen_seconds || 0) / 86400) : (sub.remaining_days || 0);
-    if (inactive || sub.status === 'none' || sub.status === 'expired' || sub.status === 'inactive') {
-      ring.style.strokeDashoffset = String(circumference * 0.92);
-      ring.style.stroke = '#ff737d';
-      if (ringLabel) ringLabel.textContent = 'OFF';
-      return;
-    }
-    const horizon = days <= 30 ? 30 : days <= 90 ? 90 : days <= 180 ? 180 : 365;
-    const ratio = Math.max(0.08, Math.min(1, days / horizon));
-    ring.style.strokeDashoffset = String(Math.round(circumference * (1 - ratio) * 10) / 10);
-    if (sub.status === 'frozen') {
-      ring.style.stroke = '#74f2ff';
-      if (ringLabel) ringLabel.textContent = 'PAUSE';
-    } else if (days <= 7) {
-      ring.style.stroke = '#ffc46b';
-      if (ringLabel) ringLabel.textContent = `${days}д`;
-    } else {
-      ring.style.stroke = '#67eaff';
-      if (ringLabel) ringLabel.textContent = sub.protocol === 'hysteria' ? 'HYS' : 'AWG';
-    }
-  }
-
   function renderHome() {
     const sub = state.subscription, viewer = state.viewer, familyMember = state.access_mode === 'family_member';
     const inactive = state.cabinet_mode === 'inactive';
@@ -279,37 +250,25 @@
     const hasPers = Boolean(pers?.active && pers.value > 0);
     document.body.dataset.cabinetMode = state.cabinet_mode || 'inactive';
 
-    const liveChipText = $('live-chip-text');
-    if (liveChipText) {
-      liveChipText.textContent = sub.status === 'active' ? 'Защищено' : sub.status === 'frozen' ? 'Пауза' : 'Ожидает';
-    }
-
     $('viewer-name').textContent = personalMessage(viewer);
     const pred = barnumPrediction(viewer);
     if ($('barnum-text')) $('barnum-text').textContent = pred.text;
-    if ($('barnum-chip-label')) $('barnum-chip-label').textContent = `Мысль дня · ${pred.number}/${pred.total}`;
+    if ($('barnum-chip-label')) $('barnum-chip-label').textContent = `${pred.number}/${pred.total}`;
 
     const hour = new Date().getHours();
-    $('greeting').textContent = hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
+    if ($('greeting')) $('greeting').textContent = hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
 
     const pill = $('status-pill');
     pill.textContent = statusText[sub.status] || sub.status;
     pill.className = `status-pill ${sub.status}`;
 
     $('days-value').textContent = sub.status === 'frozen' ? Math.ceil(sub.frozen_seconds / 86400) : sub.remaining_days;
-    $('days-label').textContent = sub.status === 'frozen' ? 'дней сохранено' : sub.status === 'none' ? 'оформите доступ' : 'дней осталось';
+    $('days-label').textContent = sub.status === 'frozen' ? 'дн. на паузе' : sub.status === 'none' ? 'нет активного плана' : 'дней осталось';
     $('subscription-kind').textContent = familyMember ? 'Семейный доступ' : 'Подписка';
     $('expiry-value').textContent = sub.status === 'frozen' ? 'На паузе' : fmtDate(sub.expires_at);
     $('devices-value').textContent = familyMember ? `${sub.occupied_slots} слот` : `${sub.occupied_slots} / ${sub.device_limit}`;
     $('protocol-value').textContent = sub.protocol === 'amneziawg' ? 'AWG' : sub.protocol === 'hysteria' ? 'Hysteria' : '—';
-
-    const primaryLabel = nodeLabel(sub.server.node, inactive);
-    $('card-node-value').textContent = primaryLabel;
-    if ($('route-primary-pill')) $('route-primary-pill').textContent = primaryLabel;
-    if ($('route-reserve-pill')) {
-      $('route-reserve-pill').textContent = sub.protocol === 'amneziawg' ? 'Reserve · Польша 🇵🇱' : 'Прямой контур ⚡';
-    }
-    updateHeroRing(sub, inactive);
+    $('card-node-value').textContent = nodeLabel(sub.server.node, inactive);
 
     $('freeze-caption').textContent = `доступно ${sub.freeze_bank_days} дн.`;
     const freeze = $('freeze-action');
@@ -323,38 +282,45 @@
       if (hasSale) {
         const deadline = sale.expires_at ? ` · до ${fmtDateTime(sale.expires_at)}` : '';
         homePromo.hidden = false;
-        homePromo.innerHTML = `<div><b>🔥 Горячая акция −${sale.percent}%</b><small>Цены в разделе «Купить» уже снижены${esc(deadline)}</small></div><span>Забрать −${sale.percent}%</span>`;
+        homePromo.innerHTML = `<div><b>Акция −${sale.percent}%</b><small>Тарифы уже снижены${esc(deadline)}</small></div><span>−${sale.percent}%</span>`;
       } else if (hasPers) {
         const unit = pers.type === 'rub' ? '₽' : '%';
         const deadline = pers.expires_at ? ` · до ${fmtDateTime(pers.expires_at)}` : '';
         homePromo.hidden = false;
-        homePromo.innerHTML = `<div><b>🎁 Персональная скидка −${pers.value}${unit}</b><small>Скидка уже учтена в тарифах${esc(deadline)}</small></div><span>Применить</span>`;
+        homePromo.innerHTML = `<div><b>Персональная скидка −${pers.value}${unit}</b><small>Уже учтена в тарифах${esc(deadline)}</small></div><span>Забрать</span>`;
       } else {
         homePromo.hidden = true;
       }
     }
 
     const purchase = $('purchase-cta');
+    const extendBtn = $('card-extend-btn');
     const lowDays = ['active','frozen'].includes(sub.status) && sub.remaining_days <= 7;
+    const showBigPurchaseCta = inactive || lowDays;
+    if (extendBtn) {
+      extendBtn.hidden = showBigPurchaseCta;
+      extendBtn.textContent = familyMember ? 'Продлить семью ›' : 'Продлить ›';
+    }
+    purchase.hidden = !showBigPurchaseCta;
     purchase.querySelector('b').textContent = familyMember ? 'Продлить всю семью' : lowDays ? 'Продлить доступ заранее' : ['active','frozen'].includes(sub.status) ? 'Купить ещё время' : 'Подключить neXus Ray';
-    purchase.querySelector('small').textContent = hasSale ? `акция −${sale.percent}% уже применяется автоматически` : familyMember ? 'дни получат владелец и все участники' : lowDays ? 'сохраните настройки без перерыва в работе' : ['active','frozen'].includes(sub.status) ? 'продлить срок с выгодой до 30% или изменить лимит' : 'мгновенная выдача ключей · основной и резервный контур';
+    purchase.querySelector('small').textContent = hasSale ? `акция −${sale.percent}% применяется автоматически` : familyMember ? 'дни получат владелец и все участники' : lowDays ? 'сохраните настройки без перерыва в работе' : 'мгновенная выдача ключей · основной и резервный контур';
     const badge = $('purchase-badge');
-    if (badge) badge.textContent = hasSale ? `🔥 Акция −${sale.percent}%` : hasPers ? `🎁 Скидка −${pers.value}${pers.type==='rub'?'₽':'%'}` : familyMember ? 'Вся семья' : lowDays ? 'Пора продлить' : ['active','frozen'].includes(sub.status) ? 'Выгода до −30%' : 'Мгновенно';
+    if (badge) badge.textContent = hasSale ? `−${sale.percent}%` : hasPers ? `−${pers.value}${pers.type==='rub'?'₽':'%'}` : lowDays ? 'Пора продлить' : 'До −30%';
 
     const qrBtn = $('qr-action'), config = $('config-action'), quickGrid = $('quick-connect-grid');
     if (quickGrid) quickGrid.hidden = inactive && !familyMember;
     if (qrBtn) {
       qrBtn.hidden = inactive && !familyMember;
-      qrBtn.querySelector('b').textContent = 'Большой QR-код';
-      qrBtn.querySelector('small').textContent = sub.protocol === 'amneziawg' ? 'основной и резерв свайпом' : 'открыть QR прямо здесь';
+      qrBtn.querySelector('b').textContent = 'Большой QR';
+      qrBtn.querySelector('small').textContent = sub.protocol === 'amneziawg' ? 'основной и резерв' : 'открыть на экране';
     }
     config.hidden = inactive && !familyMember;
     config.querySelector('b').textContent = sub.protocol === 'amneziawg' ? 'Файлы в бот' : 'Ссылка в бот';
-    config.querySelector('small').textContent = sub.protocol === 'amneziawg' ? 'отправим .conf в чат' : 'пришлём ключ в чат';
+    config.querySelector('small').textContent = sub.protocol === 'amneziawg' ? '.conf файлы в чат' : 'пришлём ключ в чат';
 
     const regen = $('regen-action');
     regen.hidden = inactive && !familyMember;
-    regen.querySelector('b').textContent = familyMember ? 'Перевыпустить семейный ключ' : sub.protocol === 'amneziawg' ? 'Перевыпустить устройство' : 'Перевыпустить доступ';
+    regen.querySelector('b').textContent = familyMember ? 'Перевыпустить семейный ключ' : sub.protocol === 'amneziawg' ? 'Перевыпустить ключ' : 'Перевыпустить доступ';
     regen.querySelector('small').textContent = familyMember ? 'только ваш собственный слот' : sub.protocol === 'amneziawg' ? 'мгновенно откроем свежий QR' : 'старая ссылка перестанет работать';
   }
 
@@ -410,20 +376,18 @@
     if (banner) {
       if (hasSale) {
         const monthsList = (sale.months || []).length === 4 ? 'на все периоды' : `на ${(sale.months || []).join(' / ')} мес.`;
-        const deadline = sale.expires_at ? `До ${fmtDateTime(sale.expires_at)}` : 'Ограниченное предложение';
+        const deadline = sale.expires_at ? `До ${fmtDateTime(sale.expires_at)}` : 'Акция';
         banner.hidden = false;
         banner.className = 'promo-banner';
-        banner.innerHTML = `<div class="promo-top"><span class="promo-tag">🔥 Акция −${sale.percent}%</span><span class="promo-deadline">⏳ ${esc(deadline)}</span></div><h3>Скидка −${sale.percent}% ${esc(monthsList)}</h3><p>Все цены ниже уже пересчитаны со скидкой — продлите сейчас, дни суммируются с вашим текущим остатком.</p>`;
+        banner.innerHTML = `<div class="promo-top"><span class="promo-tag">Акция −${sale.percent}%</span><span class="promo-deadline">${esc(deadline)}</span></div><h3>Скидка −${sale.percent}% ${esc(monthsList)}</h3><p>Цены ниже уже пересчитаны со скидкой — при продлении дни суммируются.</p>`;
       } else if (hasPers) {
         const unit = pers.type === 'rub' ? '₽' : '%';
-        const deadline = pers.expires_at ? `До ${fmtDateTime(pers.expires_at)}` : 'Персональный бонус';
+        const deadline = pers.expires_at ? `До ${fmtDateTime(pers.expires_at)}` : 'Бонус';
         banner.hidden = false;
         banner.className = 'promo-banner';
-        banner.innerHTML = `<div class="promo-top"><span class="promo-tag">🎁 Ваша скидка −${pers.value}${unit}</span><span class="promo-deadline">${esc(deadline)}</span></div><h3>Персональная цена активирована</h3><p>Скидка учтена в карточках тарифов и спишется только после успешной оплаты.</p>`;
+        banner.innerHTML = `<div class="promo-top"><span class="promo-tag">Скидка −${pers.value}${unit}</span><span class="promo-deadline">${esc(deadline)}</span></div><h3>Персональная цена активирована</h3><p>Скидка учтена в карточках тарифов и спишется только после оплаты.</p>`;
       } else {
-        banner.hidden = false;
-        banner.className = 'promo-banner calm';
-        banner.innerHTML = `<div class="promo-top"><span class="promo-tag">💎 Выгода до −30%</span><span class="promo-deadline">Основной + резервный контур</span></div><h3>Чем дольше период — тем ниже цена за месяц</h3><p>При продлении все оставшиеся дни полностью сохраняются и суммируются.</p>`;
+        banner.hidden = true;
       }
     }
 
@@ -470,9 +434,9 @@
       $('plans-caption').textContent = 'Выберите срок продления общей подписки.';
     } else {
       context.hidden = true;
-      $('plans-caption').textContent = active ? 'Покупка добавит время к текущему тарифу.' : 'Выберите количество устройств и период.';
+      $('plans-caption').textContent = active ? 'Дни суммируются с текущим остатком.' : 'Выберите количество устройств и период.';
     }
-    const discounts = {1:'Базовый период',3:'🔥 Популярный · −8%',6:'💎 Выгода −17%',12:'👑 Максимум выгоды −30%'};
+    const discounts = {1:'Базовый',3:'Популярный · −8%',6:'Выгода −17%',12:'Максимум выгоды −30%'};
     $('plan-list').innerHTML = state.plans.map((plan) => {
       const item = plan.prices.find((p) => p.devices === selectedDevices);
       const baseAmount = item.base_amount || item.amount;
@@ -483,9 +447,9 @@
       const featured = plan.months === 12;
       const popular = plan.months === 3;
       const badges = [`<span class="plan-pill">${esc(discounts[plan.months])}</span>`];
-      if (item.discount_label) badges.push(`<span class="plan-pill sale">🔥 ${esc(item.discount_label)}</span>`);
+      if (item.discount_label) badges.push(`<span class="plan-pill sale">${esc(item.discount_label)}</span>`);
       else if (totalSaved > 0) badges.push(`<span class="plan-pill save">Экономия ${totalSaved} ₽</span>`);
-      return `<article class="plan-card ${featured?'featured':popular?'popular':''} ${hasDiscount?'sale-active':''}"><div><div class="plan-badges">${badges.join('')}</div><strong>${monthWord(plan.months)}</strong><div class="price-row"><strong>${item.amount} ₽</strong>${hasDiscount?`<s>${baseAmount} ₽</s>`:''}</div><div class="plan-meta">${selectedDevices} устр. · ~${perMonth} ₽/мес.${totalSaved>0?` · выгода ${totalSaved} ₽`:''}</div></div><button data-buy="${plan.months}" ${!state.payments_enabled?'disabled':''}>${hasDiscount?'Забрать':'Купить'}</button></article>`;
+      return `<article class="plan-card ${featured?'featured':popular?'popular':''} ${hasDiscount?'sale-active':''}"><div><div class="plan-badges">${badges.join('')}</div><strong>${monthWord(plan.months)}</strong><div class="price-row"><strong>${item.amount} ₽</strong>${hasDiscount?`<s>${baseAmount} ₽</s>`:''}</div><div class="plan-meta">${selectedDevices} устр. · ~${perMonth} ₽/мес.</div></div><button data-buy="${plan.months}" ${!state.payments_enabled?'disabled':''}>${hasDiscount?'Забрать':'Выбрать'}</button></article>`;
     }).join('');
   }
 
@@ -536,7 +500,6 @@
     if (globalRegen) globalRegen.onclick = confirmRegenerate;
   }
 
-  // 1:1 Finger-Tracked Big QR Carousel Modal
   async function openQrModal(slot=1, ownerId=0, freshNotice='') {
     const data = await runAction('qr', {slot, owner_id:ownerId||undefined}, {refresh:false, progress:'Готовим большой QR-код…', notifySuccess:false});
     if (!data || !data.items?.length) return;
@@ -548,12 +511,12 @@
     $('sheet-content').innerHTML = `
       <h2>${esc(data.device_name || `Слот ${slot}`)}</h2>
       ${freshNotice
-        ? `<div class="qr-fresh-banner">✅ ${esc(freshNotice)}</div>`
-        : `<p>${multi ? 'Переключайте Основной и Резервный контур свайпом пальца или вкладками ниже.' : 'Отсканируйте QR-код с другого устройства или отправьте файлы в бот.'}</p>`}
+        ? `<div class="qr-fresh-banner">✓ ${esc(freshNotice)}</div>`
+        : `<p>${multi ? 'Переключайте Основной и Резервный контур свайпом или вкладками.' : 'Отсканируйте QR-код с другого устройства или отправьте файлы в бот.'}</p>`}
       <div class="qr-viewer" id="qr-swipe-area">
         <div class="qr-tabs ${multi?'':'single'}" id="qr-tabs" style="--qr-idx:0">
           <div class="qr-tab-pill" aria-hidden="true"></div>
-          ${items.map((it, i) => `<button type="button" data-qr-tab="${i}" class="${i===0?'active':''}">${it.role==='reserve'?'🛡 Резерв (RS)':'🟢 Основной'}</button>`).join('')}
+          ${items.map((it, i) => `<button type="button" data-qr-tab="${i}" class="${i===0?'active':''}">${it.role==='reserve'?'Резерв (RS)':'Основной'}</button>`).join('')}
         </div>
         <div class="qr-carousel-viewport" id="qr-viewport">
           <div class="qr-carousel-track" id="qr-track">
@@ -575,10 +538,10 @@
           </div>
         </div>
         ${multi ? `<div class="qr-dots" id="qr-dots">${items.map((_, i) => `<i class="${i===0?'active':''}"></i>`).join('')}</div>` : ''}
-        <div class="qr-hint">Откройте <b>AmneziaWG</b> → нажмите <b>«+»</b> → <b>Сканировать QR-код</b></div>
+        <div class="qr-hint">Приложение <b>AmneziaWG</b> → <b>«+»</b> → <b>Сканировать QR-код</b></div>
       </div>
       <div class="sheet-actions">
-        <button type="button" id="qr-send-files">📥 Файлы .conf в бот</button>
+        <button type="button" id="qr-send-files">Файлы .conf в бот</button>
         <button type="button" class="primary" id="qr-done">Готово</button>
       </div>`;
 
@@ -706,18 +669,18 @@
   function openGuideSheet() {
     resetSheetTransform();
     $('sheet-content').innerHTML = `
-      <h2>Как подключить за 1 минуту</h2>
-      <p>Установите официальное приложение AmneziaWG и добавьте ключ через QR-код или файл из бота:</p>
+      <h2>Инструкция подключения</h2>
+      <p>Установите бесплатное приложение AmneziaWG и добавьте ключ через QR-код или файл из бота:</p>
       <div class="guide-steps">
-        <div class="guide-step"><b>1</b><div>Скачайте бесплатное приложение <b>AmneziaWG</b> для вашего устройства по кнопкам ниже.</div></div>
-        <div class="guide-step"><b>2</b><div>Нажмите <b>«Большой QR-код»</b> (если сканируете с экрана другого устройства) или <b>«Файлы в бот»</b> (чтобы импортировать файл <code>.conf</code> на этом же телефоне).</div></div>
+        <div class="guide-step"><b>1</b><div>Скачайте официальное приложение <b>AmneziaWG</b> для вашего устройства по кнопкам ниже.</div></div>
+        <div class="guide-step"><b>2</b><div>Нажмите <b>«Большой QR-код»</b> (если сканируете с другого экрана) или <b>«Файлы в бот»</b> (для импорта <code>.conf</code> на этом телефоне).</div></div>
         <div class="guide-step"><b>3</b><div>Добавьте и <b>Основной</b>, и <b>Резервный (RS)</b> маршрут — включайте по одному тумблеру.</div></div>
       </div>
       <div class="app-links">
-        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">🍎 iPhone / iPad</button>
-        <button type="button" data-app-url="https://play.google.com/store/apps/details?id=org.amnezia.awg">🤖 Android</button>
-        <button type="button" data-app-url="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest">💻 Windows</button>
-        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">🍏 macOS</button>
+        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">iPhone / iPad</button>
+        <button type="button" data-app-url="https://play.google.com/store/apps/details?id=org.amnezia.awg">Android</button>
+        <button type="button" data-app-url="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest">Windows</button>
+        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">macOS</button>
       </div>
       <div class="sheet-actions" style="grid-template-columns:1fr">
         <button type="button" class="primary" id="guide-close">Понятно</button>
@@ -919,7 +882,6 @@
     }
   });
 
-  // Emil Kowalski Blur-Morph transition on Barnum card
   const cycleBarnum = () => {
     if (!state?.viewer) return;
     barnumOffset += 1;
@@ -939,7 +901,7 @@
       const pred = barnumPrediction(state.viewer);
       if (nameEl) nameEl.textContent = personalMessage(state.viewer);
       if (textEl) textEl.textContent = pred.text;
-      if (chipLabel) chipLabel.textContent = `Мысль дня · ${pred.number}/${pred.total}`;
+      if (chipLabel) chipLabel.textContent = `${pred.number}/${pred.total}`;
       textEl?.classList.remove('is-morphing');
       nameEl?.classList.remove('is-morphing');
     }, 145);
@@ -957,11 +919,6 @@
   if ($('barnum-chip')) $('barnum-chip').onclick = cycleBarnum;
   if ($('card-node-btn')) {
     $('card-node-btn').onclick = () => {
-      if (state?.cabinet_mode !== 'inactive') openQuickQr();
-    };
-  }
-  if ($('route-contour')) {
-    $('route-contour').onclick = () => {
       if (state?.cabinet_mode !== 'inactive') openQuickQr();
     };
   }
