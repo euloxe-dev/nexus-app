@@ -522,9 +522,10 @@
   let focusedSeriesIdx = null;
   let selectedDayIdx = 6;
 
-  function buildSmoothSplinePath(pts) {
+  function buildSmoothSplinePath(pts, minY = -Infinity, maxY = Infinity) {
     if (!pts.length) return '';
     if (pts.length === 1) return `M ${pts[0].x} ${pts[0].y}`;
+    const clampY = (val, lo, hi) => Math.max(minY, Math.min(maxY, Math.max(lo, Math.min(hi, val))));
     let d = `M ${pts[0].x.toFixed(1)} ${pts[0].y.toFixed(1)}`;
     for (let i = 0; i < pts.length - 1; i++) {
       const p0 = pts[Math.max(0, i - 1)];
@@ -532,19 +533,51 @@
       const p2 = pts[i + 1];
       const p3 = pts[Math.min(pts.length - 1, i + 2)];
       const cp1x = p1.x + (p2.x - p0.x) / 6;
-      const cp1y = p1.y + (p2.y - p0.y) / 6;
       const cp2x = p2.x - (p3.x - p1.x) / 6;
-      const cp2y = p2.y - (p3.y - p1.y) / 6;
+      const segMin = Math.min(p1.y, p2.y);
+      const segMax = Math.max(p1.y, p2.y);
+      const flat = Math.abs(p1.y - p2.y) < 0.05;
+      const cp1y = flat ? p1.y : clampY(p1.y + (p2.y - p0.y) / 6, segMin, segMax);
+      const cp2y = flat ? p2.y : clampY(p2.y - (p3.y - p1.y) / 6, segMin, segMax);
       d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2.x.toFixed(1)} ${p2.y.toFixed(1)}`;
     }
     return d;
+  }
+
+  function fmtTraffic(gb) {
+    const v = Math.max(0, Number(gb) || 0);
+    if (v < 0.0005) return '0\u00A0ГБ';
+    if (v < 0.995) {
+      const mb = Math.max(1, Math.round(v * 1024));
+      return `${mb}\u00A0МБ`;
+    }
+    if (v < 10) return `${v.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')}\u00A0ГБ`;
+    return `${v.toFixed(1).replace(/\.0$/, '')}\u00A0ГБ`;
+  }
+
+  function fmtAxisTraffic(gb) {
+    if (gb <= 0) return '0';
+    if (gb < 0.995) return `${Math.max(1, Math.round(gb * 1024))}\u00A0МБ`;
+    return `${Number.isInteger(gb) ? gb : gb.toFixed(1).replace(/\.0$/, '')}\u00A0ГБ`;
+  }
+
+  function pickNiceTrafficMax(maxVal) {
+    if (maxVal <= 0) return 1;
+    const target = maxVal * 1.18;
+    const tiers = [
+      10 / 1024, 20 / 1024, 50 / 1024, 100 / 1024, 200 / 1024, 500 / 1024,
+      1, 2, 4, 6, 8, 10, 15, 20, 30, 50, 75, 100, 150, 200, 300, 500,
+    ];
+    for (const t of tiers) {
+      if (t >= target) return t;
+    }
+    return Math.ceil(target / 100) * 100;
   }
 
   function renderTrafficChart() {
     const card = $('traffic-card');
     if (!card || !state) return;
     const sub = state.subscription || {};
-    const viewerId = state.viewer?.id || 77;
     const activeDevices = (state.devices || []).filter((d) => d.configured !== false && d.kind !== 'family_pending');
     const seriesList = activeDevices.length
       ? activeDevices.map((d, idx) => ({
@@ -571,27 +604,28 @@
     ];
 
     const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+    const serverDays = Array.isArray(state.traffic_days) && state.traffic_days.length === 7 ? state.traffic_days : null;
     const now = new Date();
-    const dayBucket = Math.floor(Date.now() / 86400000);
     const days = Array.from({ length: 7 }, (_, i) => {
+      if (i === 6) return 'Сег';
+      if (serverDays) {
+        const parts = String(serverDays[i] || '').split('-').map(Number);
+        if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
+          const dt = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+          return dayNames[dt.getUTCDay()];
+        }
+      }
       const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - i));
-      return i === 6 ? 'Сег' : dayNames[dt.getDay()];
+      return dayNames[dt.getDay()];
     });
 
     const inactive = state.cabinet_mode === 'inactive' || sub.status === 'none';
     const series = seriesList.map((item, idx) => {
       const color = palette[idx % palette.length];
-      const baseScale = idx === 0 ? 2.1 : idx === 1 ? 1.55 : idx === 2 ? 0.95 : 0.65;
-      const values = item.rawSeries && item.rawSeries.length === 7
-        ? item.rawSeries
-        : Array.from({ length: 7 }, (_, dIdx) => {
-            if (inactive) return 0;
-            const h = hashSeed(viewerId + item.slot * 31, dayBucket - (6 - dIdx), idx * 17 + dIdx * 13);
-            const wave = 0.55 + ((h % 100) / 100) * 1.15;
-            const val = Math.max(0.2, +(baseScale * wave).toFixed(1));
-            return val;
-          });
-      const total = +(values.reduce((acc, v) => acc + v, 0)).toFixed(1);
+      const values = !inactive && item.rawSeries && item.rawSeries.length === 7
+        ? item.rawSeries.map((v) => Math.max(0, Number(v) || 0))
+        : [0, 0, 0, 0, 0, 0, 0];
+      const total = values.reduce((acc, v) => acc + v, 0);
       return { ...item, color, values, total };
     });
 
@@ -604,8 +638,8 @@
       titleEl.textContent = series.length > 1 ? 'Трафик по устройствам' : 'Трафик устройства';
     }
 
-    const maxVal = Math.max(2, ...series.flatMap((s) => s.values));
-    const niceMax = Math.ceil(maxVal * 1.15);
+    const maxVal = Math.max(0, ...series.flatMap((s) => s.values));
+    const niceMax = pickNiceTrafficMax(maxVal);
 
     const box = $('traffic-chart-box');
     const rect = box?.getBoundingClientRect();
@@ -627,17 +661,22 @@
     const updateHeaderAndLegend = () => {
       const subEl = $('traffic-sub');
       const totalPill = $('traffic-total-pill');
-      const activeDayLabel = selectedDayIdx === 6 ? 'Сегодня' : days[selectedDayIdx];
+      const activeDayLabel = selectedDayIdx === 6 ? 'Сегодня' : selectedDayIdx === 5 ? 'Вчера' : days[selectedDayIdx];
+      const totalWeekAll = series.reduce((acc, s) => acc + s.total, 0);
       if (focusedSeriesIdx !== null && series[focusedSeriesIdx]) {
         const s = series[focusedSeriesIdx];
-        const dayVal = s.values[selectedDayIdx].toFixed(1);
-        if (subEl) subEl.textContent = `${s.name} · ${activeDayLabel}: ${dayVal}\u00A0ГБ (за 7\u00A0дн. — ${s.total.toFixed(1)}\u00A0ГБ)`;
-        if (totalPill) totalPill.textContent = `${s.total.toFixed(1)}\u00A0ГБ`;
+        const dayVal = fmtTraffic(s.values[selectedDayIdx]);
+        const weekVal = fmtTraffic(s.total);
+        if (subEl) subEl.textContent = `${s.name} · ${activeDayLabel}: ${dayVal} (за 7\u00A0дн. — ${weekVal})`;
+        if (totalPill) totalPill.textContent = weekVal;
       } else {
-        const daySum = series.reduce((acc, s) => acc + s.values[selectedDayIdx], 0).toFixed(1);
-        const weekSum = series.reduce((acc, s) => acc + s.total, 0).toFixed(1);
-        if (subEl) subEl.textContent = `За 7 дней · ${activeDayLabel}: ${daySum}\u00A0ГБ на ${series.length}\u00A0устр.`;
-        if (totalPill) totalPill.textContent = `${weekSum}\u00A0ГБ`;
+        const daySum = series.reduce((acc, s) => acc + s.values[selectedDayIdx], 0);
+        if (subEl) {
+          if (inactive) subEl.textContent = 'Подписка неактивна · трафик не расходуется';
+          else if (totalWeekAll < 0.0005) subEl.textContent = 'Учёт трафика активен · обновление каждые 5\u00A0мин';
+          else subEl.textContent = `За 7 дней · ${activeDayLabel}: ${fmtTraffic(daySum)} на ${series.length}\u00A0устр.`;
+        }
+        if (totalPill) totalPill.textContent = fmtTraffic(totalWeekAll);
       }
 
       const legendEl = $('traffic-legend');
@@ -645,12 +684,12 @@
         legendEl.innerHTML = series.map((s, idx) => {
           const isFocused = focusedSeriesIdx === idx;
           const isDimmed = focusedSeriesIdx !== null && focusedSeriesIdx !== idx;
-          const shownVal = selectedDayIdx !== null ? s.values[selectedDayIdx].toFixed(1) : s.total.toFixed(1);
+          const shownVal = fmtTraffic(selectedDayIdx !== null ? s.values[selectedDayIdx] : s.total);
           const shortName = s.name.replace(/^Dan\s+/i, '');
           return `<button type="button" class="legend-chip${isFocused ? ' focused' : ''}${isDimmed ? ' dimmed' : ''}" data-series-idx="${idx}" aria-pressed="${isFocused}">
             <i class="legend-dot" style="background:${s.color.stroke}"></i>
             <span class="legend-name">${esc(shortName)}</span>
-            <b class="legend-val">${shownVal}\u00A0ГБ</b>
+            <b class="legend-val">${shownVal}</b>
           </button>`;
         }).join('');
 
@@ -674,19 +713,19 @@
       </linearGradient>
     `).join('');
 
-    const gridValues = [0, +(niceMax / 2).toFixed(1), niceMax];
+    const gridValues = [0, niceMax / 2, niceMax];
     const gridLines = gridValues.map((gv) => {
       const y = yAt(gv).toFixed(1);
       const labelY = gv === 0 ? (Number(y) - 3).toFixed(1) : (Number(y) + 8).toFixed(1);
       return `
         <line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="traffic-grid-line"/>
-        <text x="${padL + 2}" y="${labelY}" class="traffic-axis-label">${gv === 0 ? '0' : `${gv}\u00A0ГБ`}</text>
+        <text x="${padL + 2}" y="${labelY}" class="traffic-axis-label">${fmtAxisTraffic(gv)}</text>
       `;
     }).join('');
 
     const pathsHtml = series.map((s, idx) => {
       const pts = s.values.map((v, i) => ({ x: xAt(i), y: yAt(v) }));
-      const linePath = buildSmoothSplinePath(pts);
+      const linePath = buildSmoothSplinePath(pts, padT, baselineY);
       const areaPath = `${linePath} L ${pts[pts.length - 1].x.toFixed(1)} ${baselineY.toFixed(1)} L ${pts[0].x.toFixed(1)} ${baselineY.toFixed(1)} Z`;
       const isDimmed = focusedSeriesIdx !== null && focusedSeriesIdx !== idx;
       const activePt = pts[selectedDayIdx] || pts[pts.length - 1];
