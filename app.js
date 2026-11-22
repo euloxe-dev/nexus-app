@@ -169,10 +169,12 @@
   };
   const nodeLabel = (nodeCode, inactive) => {
     const code = String(nodeCode || '').toLowerCase();
-    if (code.startsWith('s4')) return 'Main · Париж 🇫🇷';
+    if (code.startsWith('s6') || code.startsWith('s4')) return 'Main · Бельгия 🇧🇪';
     if (code.startsWith('s3')) return 'Main · Вена 🇦🇹';
-    if (code.startsWith('s2')) return 'Reserve · Испания 🇪🇸';
-    if (code.startsWith('s1')) return 'Reserve · Польша 🇵🇱';
+    if (code.startsWith('s5') || code.startsWith('s2')) return 'Reserve · Испания 🇪🇸';
+    if (code.startsWith('s1')) return 'Reserve · Нидерланды 🇳🇱';
+    if (code.startsWith('d1')) return 'Edge · Цюрих 🇨🇭';
+    if (code.startsWith('d2')) return 'Edge · Швеция 🇸🇪';
     if (code) return code.toUpperCase();
     return inactive ? 'Ожидает' : '—';
   };
@@ -432,7 +434,7 @@
     const protoEl = $('sub-protocol') || $('protocol-value');
     if (protoEl) protoEl.textContent = protoText;
     if ($('bento-protocol-label')) {
-      $('bento-protocol-label').textContent = sub.protocol === 'amneziawg' ? '2 контура' : sub.protocol === 'hysteria' ? 'общий ключ' : 'слоты';
+      $('bento-protocol-label').textContent = sub.protocol === 'amneziawg' ? '3 контура' : sub.protocol === 'hysteria' ? 'общий ключ' : 'слоты';
     }
     const nodeEl = $('sub-node') || $('card-node-value');
     if (nodeEl) nodeEl.textContent = nodeLabel(sub.server.node, inactive);
@@ -504,7 +506,7 @@
       const qTitle = $('quick-qr-title') || qrBtn.querySelector('b');
       const qSub = $('quick-qr-sub') || qrBtn.querySelector('small');
       if (qTitle) qTitle.textContent = 'Большой QR';
-      if (qSub) qSub.textContent = sub.protocol === 'amneziawg' ? 'основной и резерв' : 'открыть на экране';
+      if (qSub) qSub.textContent = sub.protocol === 'amneziawg' ? 'все маршруты' : 'открыть на экране';
     }
     if (config) {
       config.hidden = multiDevicePlan || (inactive && !familyMember);
@@ -760,7 +762,7 @@
     }
     if (device.kind === 'family') return `<article class="device-card family"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('family')}</div><div class="device-copy"><small>Слот ${device.slot} · Семья</small><strong>${esc(device.member_name||device.name)}</strong><span>Отдельный ключ участника</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-note">Файл и перевыпуск доступны только самому участнику.</div><button type="button" class="family-danger" data-device="revoke-family" data-slot="${device.slot}">Отозвать доступ</button></article>`;
     if (device.kind === 'family_pending') return `<article class="device-card family pending"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('shield')}</div><div class="device-copy"><small>Слот ${device.slot} · Семья</small><strong>Приглашение отправлено</strong><span>Ожидает принятия участником</span></div><i class="device-state waiting" role="img" aria-label="Ожидает"></i></div><button type="button" class="family-danger" data-device="cancel-invite" data-slot="${device.slot}">Отменить приглашение</button></article>`;
-    return `<article class="device-card"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('phone')}</div><div class="device-copy"><small>Слот ${device.slot}</small><strong>${esc(device.name)}</strong><span>Основной + резервный контур</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-buttons"><button type="button" class="accent" data-device="qr" data-slot="${device.slot}">${icon('qr')} Большой QR</button><button type="button" class="accent" data-device="get" data-slot="${device.slot}">${icon('download')} Файлы в бот</button><button type="button" data-device="rename" data-slot="${device.slot}">${icon('edit')} Имя</button><button type="button" data-device="regenerate" data-slot="${device.slot}">${icon('refresh')} Сброс</button><button type="button" class="danger" data-device="delete" data-slot="${device.slot}" ${device.slot===1?'disabled':''}>${icon('trash')} Удалить</button></div></article>`;
+    return `<article class="device-card"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('phone')}</div><div class="device-copy"><small>Слот ${device.slot}</small><strong>${esc(device.name)}</strong><span>3 контура · основной, резерв и Edge</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-buttons"><button type="button" class="accent" data-device="qr" data-slot="${device.slot}">${icon('qr')} Большой QR</button><button type="button" class="accent" data-device="get" data-slot="${device.slot}">${icon('download')} Файлы в бот</button><button type="button" data-device="rename" data-slot="${device.slot}">${icon('edit')} Имя</button><button type="button" data-device="regenerate" data-slot="${device.slot}">${icon('refresh')} Сброс</button><button type="button" class="danger" data-device="delete" data-slot="${device.slot}" ${device.slot===1?'disabled':''}>${icon('trash')} Удалить</button></div></article>`;
   }
 
   function renderDevices() {
@@ -950,16 +952,23 @@
     const items = data.items;
     const multi = items.length > 1;
 
+    const qrTabLabel = (it, i) => {
+      if (it.role === 'primary') return 'Основной';
+      if (it.role === 'reserve') return 'Резерв';
+      if (it.role === 'edge') return 'Edge';
+      return it.title || `Маршрут ${i + 1}`;
+    };
+
     resetSheetTransform();
     $('sheet-content').innerHTML = `
       <h2 id="sheet-title">${esc(data.device_name || `Слот ${slot}`)}</h2>
       ${freshNotice
         ? `<div class="qr-fresh-banner">✓ ${esc(freshNotice)}</div>`
-        : `<p>${multi ? 'Переключайте Основной и Резервный контур свайпом или вкладками.' : 'Отсканируйте QR-код с другого устройства или отправьте файлы в бот.'}</p>`}
+        : `<p>${multi ? 'Переключайте маршруты свайпом или вкладками.' : 'Отсканируйте QR-код с другого устройства или отправьте файлы в бот.'}</p>`}
       <div class="qr-viewer" id="qr-swipe-area">
-        <div class="qr-tabs ${multi?'':'single'}" id="qr-tabs" role="tablist" aria-label="Маршрут" style="--qr-idx:0">
+        <div class="qr-tabs ${multi?'':'single'}" id="qr-tabs" role="tablist" aria-label="Маршрут" style="--qr-idx:0;--qr-count:${items.length}">
           <div class="qr-tab-pill" aria-hidden="true"></div>
-          ${items.map((it, i) => `<button type="button" role="tab" aria-selected="${i===0}" data-qr-tab="${i}" class="${i===0?'active':''}">${it.role==='reserve'?'Резерв (RS)':'Основной'}</button>`).join('')}
+          ${items.map((it, i) => `<button type="button" role="tab" aria-selected="${i===0}" data-qr-tab="${i}" class="${i===0?'active':''}">${esc(qrTabLabel(it, i))}</button>`).join('')}
         </div>
         <div class="qr-carousel-viewport" id="qr-viewport">
           <div class="qr-carousel-track" id="qr-track">
@@ -981,7 +990,7 @@
           </div>
         </div>
         ${multi ? `<div class="qr-dots" id="qr-dots" aria-hidden="true">${items.map((_, i) => `<i class="${i===0?'active':''}"></i>`).join('')}</div>` : ''}
-        <div class="qr-hint">Приложение <b>AmneziaWG</b> → <b>«+»</b> → <b>Сканировать QR-код</b></div>
+        <div class="qr-hint">Приложение <b>EX WG</b> или <b>AmneziaWG</b> → <b>«+»</b> → <b>Сканировать QR-код</b></div>
       </div>
       <div class="sheet-actions">
         <button type="button" id="qr-send-files">Файлы .conf в бот</button>
@@ -1130,11 +1139,11 @@
     resetSheetTransform();
     $('sheet-content').innerHTML = `
       <h2 id="sheet-title">Инструкция подключения</h2>
-      <p>Установите бесплатное приложение AmneziaWG и добавьте ключ через QR-код или файл из бота:</p>
+      <p>Установите приложение <b>EX WG</b> (установщик доступен в боте для Android и Windows) или официальный <b>AmneziaWG</b>:</p>
       <div class="guide-steps">
-        <div class="guide-step"><b>1</b><div>Скачайте официальное приложение <b>AmneziaWG</b> для вашего устройства по кнопкам ниже.</div></div>
-        <div class="guide-step"><b>2</b><div>Нажмите <b>«Большой QR»</b> (если сканируете с другого экрана) или <b>«Файлы в бот»</b> (для импорта <code>.conf</code> на этом телефоне).</div></div>
-        <div class="guide-step"><b>3</b><div>Добавьте и <b>Основной</b>, и <b>Резервный (RS)</b> маршрут — включайте по одному тумблеру.</div></div>
+        <div class="guide-step"><b>1</b><div>Скачайте приложение <b>AmneziaWG</b> по кнопкам ниже или получите <b>EX WG 1.0</b> в разделе инструкций бота.</div></div>
+        <div class="guide-step"><b>2</b><div>Нажмите <b>«Большой QR»</b> (для сканирования с другого экрана) или <b>«Файлы в бот»</b> (придёт архив <code>neXusRay.zip</code> и отдельные <code>.conf</code>).</div></div>
+        <div class="guide-step"><b>3</b><div>Добавьте все 3 маршрута (основной, резерв и Edge) — включайте по одному тумблеру, а при просадке сети просто переключите страну.</div></div>
       </div>
       <div class="app-links">
         <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">iPhone / iPad</button>
@@ -1170,8 +1179,8 @@
           if (r) {
             pendingPayment = r;
             $('pending-payment').hidden = false;
-            $('pending-amount').textContent = `${r.amount} ₽`;
-            tg?.openLink(r.confirmation_url);
+            $('pending-amount').textContent = `${r.amount}\u00A0₽`;
+            openExternal(r.confirmation_url);
           }
         }},
       ]
@@ -1367,16 +1376,44 @@
     if (tg?.openTelegramLink) tg.openTelegramLink(state.support_url);
     else window.open(state.support_url, '_blank');
   };
-  $('offer-link').onclick = () => {
-    const url = 'https://telegra.ph/Publichnaya-oferta-Polzovatelskoe-soglashenie-02-22';
-    if (tg?.openLink) tg.openLink(url);
-    else window.open(url, '_blank');
-  };
+  const OFFER_URL = 'https://telegra.ph/Publichnaya-oferta-Polzovatelskoe-soglashenie-02-22';
+  $('offer-link').onclick = () => openExternal(OFFER_URL);
+  if ($('inline-offer-link')) {
+    $('inline-offer-link').onclick = (e) => {
+      e.preventDefault();
+      openExternal(OFFER_URL);
+    };
+  }
+  if ($('open-payment')) {
+    $('open-payment').onclick = () => {
+      if (pendingPayment?.confirmation_url) openExternal(pendingPayment.confirmation_url);
+    };
+  }
   $('check-payment').onclick = async () => {
     if (!pendingPayment) return;
     const r = await runAction('payments/check', {payment_id:pendingPayment.payment_id}, {progress:'Проверяем оплату…'});
-    if (['applied','confirmed','manual_review'].includes(r?.status)) $('pending-payment').hidden = true;
+    if (['applied','confirmed','manual_review','canceled'].includes(r?.status)) {
+      $('pending-payment').hidden = true;
+      pendingPayment = null;
+    }
   };
+  document.addEventListener('visibilitychange', async () => {
+    if (document.hidden || !pendingPayment || busy) return;
+    try {
+      const r = await api('payments/check', {
+        method: 'POST',
+        body: JSON.stringify({ payment_id: pendingPayment.payment_id }),
+      });
+      if (['applied','confirmed','manual_review','canceled'].includes(r?.status)) {
+        $('pending-payment').hidden = true;
+        pendingPayment = null;
+        if (r?.status === 'applied' || r?.status === 'confirmed') {
+          notify(r.message || 'Оплата подтверждена!');
+          await load();
+        }
+      }
+    } catch (_) {}
+  });
   if (!initData) {
     setTimeout(() => {
       $('loading').hidden = true;

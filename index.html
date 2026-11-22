@@ -4,8 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#cbb8a4">
-  <title>neXus Ray · Glassy V2</title>
-  <link rel="stylesheet" href="styles.css?v=24">
+  <title>neXus Ray · ЛК</title>
+  <link rel="stylesheet" href="styles.css?v=26">
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
 </head>
 <body>
@@ -111,7 +111,7 @@
               <span class="quick-icon" aria-hidden="true"><svg><use href="#i-qr"></use></svg></span>
               <span class="quick-copy">
                 <b id="quick-qr-title">Большой QR</b>
-                <small id="quick-qr-sub">основной и резерв</small>
+                <small id="quick-qr-sub">все маршруты</small>
               </span>
             </button>
             <button id="quick-config" class="quick" data-action="configs">
@@ -166,7 +166,7 @@
               <em class="mini-badge emerald">1 мин</em>
             </div>
             <b>Инструкция</b>
-            <small>AmneziaWG</small>
+            <small>EX WG / AWG</small>
           </button>
 
           <button class="mini-wallet" type="button" data-action="regenerate">
@@ -237,13 +237,16 @@
             <span>Ожидает подтверждения</span>
             <b id="pending-amount">—</b>
           </div>
-          <button id="check-payment">Проверить</button>
+          <div class="pending-actions">
+            <button id="open-payment" type="button" class="secondary">Открыть</button>
+            <button id="check-payment" type="button">Проверить</button>
+          </div>
         </div>
 
         <div id="plans-list" class="plan-list"></div>
 
         <p class="legal">
-          Оплачивая подписку, вы соглашаетесь с <a id="inline-offer-link" href="#" target="_blank" rel="noopener">публичной офертой</a>.
+          Оплачивая подписку, вы соглашаетесь с <a id="inline-offer-link" href="https://telegra.ph/Publichnaya-oferta-Polzovatelskoe-soglashenie-02-22" target="_blank" rel="noopener">публичной офертой</a>.
         </p>
       </section>
 
@@ -328,6 +331,6 @@
     <b id="activity-text">Выполняем…</b>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=25"></script>
+  <script src="app.js?v=26"></script>
 </body>
 </html>
