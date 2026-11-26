@@ -430,11 +430,11 @@
     }
     const devEl = $('sub-devices') || $('devices-value');
     if (devEl) devEl.textContent = familyMember ? `${sub.occupied_slots} слот` : `${sub.occupied_slots} / ${sub.device_limit}`;
-    const protoText = sub.protocol === 'amneziawg' ? 'AWG' : sub.protocol === 'hysteria' ? 'Hysteria' : '—';
+    const protoText = sub.protocol ? 'AWG' : '—';
     const protoEl = $('sub-protocol') || $('protocol-value');
     if (protoEl) protoEl.textContent = protoText;
     if ($('bento-protocol-label')) {
-      $('bento-protocol-label').textContent = sub.protocol === 'amneziawg' ? '3 контура' : sub.protocol === 'hysteria' ? 'общий ключ' : 'слоты';
+      $('bento-protocol-label').textContent = sub.protocol ? '3 контура' : 'слоты';
     }
     const nodeEl = $('sub-node') || $('card-node-value');
     if (nodeEl) nodeEl.textContent = nodeLabel(sub.server.node, inactive);
@@ -497,7 +497,7 @@
     const quickGrid = $('quick-connect-grid');
     const qrBtn = $('quick-qr') || $('qr-action');
     const config = $('quick-config') || $('config-action');
-    const multiDevicePlan = (sub.device_limit || 1) > 1 && sub.protocol === 'amneziawg' && !familyMember;
+    const multiDevicePlan = (sub.device_limit || 1) > 1 && !familyMember;
     if (quickGrid) {
       quickGrid.hidden = multiDevicePlan || (inactive && !familyMember);
     }
@@ -506,14 +506,14 @@
       const qTitle = $('quick-qr-title') || qrBtn.querySelector('b');
       const qSub = $('quick-qr-sub') || qrBtn.querySelector('small');
       if (qTitle) qTitle.textContent = 'Большой QR';
-      if (qSub) qSub.textContent = sub.protocol === 'amneziawg' ? 'все маршруты' : 'открыть на экране';
+      if (qSub) qSub.textContent = 'все маршруты';
     }
     if (config) {
       config.hidden = multiDevicePlan || (inactive && !familyMember);
       const cTitle = $('quick-config-title') || config.querySelector('b');
       const cSub = $('quick-config-sub') || config.querySelector('small');
-      if (cTitle) cTitle.textContent = sub.protocol === 'amneziawg' ? 'Файлы в бот' : 'Ссылка в бот';
-      if (cSub) cSub.textContent = sub.protocol === 'amneziawg' ? '.conf в чат' : 'ключ в чат';
+      if (cTitle) cTitle.textContent = 'Файлы в бот';
+      if (cSub) cSub.textContent = '.conf в чат';
     }
 
     renderTrafficChart();
@@ -588,7 +588,7 @@
       : [
           {
             slot: 1,
-            name: sub.protocol === 'hysteria' ? 'Hysteria · Все устройства' : 'Основное устройство',
+            name: 'Основное устройство',
             rawSeries: null,
           },
         ];
@@ -824,8 +824,8 @@
       const pct = sub.device_limit > 0 ? Math.min(100, Math.round((sub.occupied_slots / sub.device_limit) * 100)) : 0;
       slotBar.style.width = `${pct}%`;
     }
-    if (sub.protocol !== 'amneziawg') {
-      if (list) list.innerHTML = `<article class="device-card"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('server')}</div><div class="device-copy"><small>Единая подписка</small><strong>Hysteria</strong><span>До ${sub.device_limit} устройств</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-buttons"><button type="button" class="accent" data-global-qr>${icon('qr')} Большой QR</button><button type="button" class="accent" data-global-config>${icon('download')} Ссылка в бот</button><button type="button" style="grid-column:span 6" data-global-regen>${icon('refresh')} Перевыпустить ключ</button></div></article>`;
+    if (state.cabinet_mode === 'inactive' && !state.devices.length) {
+      if (list) list.innerHTML = `<article class="device-card empty"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('shield')}</div><div class="device-copy"><small>Подписка не активна</small><strong>Нет активных устройств</strong><span>Оформите подписку, чтобы создать ключи AmneziaWG</span></div></div><button type="button" class="add-device" data-go-plans>Выбрать тариф</button></article>`;
       return;
     }
     const map = new Map(state.devices.map((d) => [d.slot, d]));
@@ -976,12 +976,7 @@
     const changePlan = document.querySelector('[data-change-plan]');
     if (changePlan) changePlan.onclick = confirmPlanChange;
     document.querySelectorAll('[data-device]').forEach((b) => b.onclick = () => devicePrompt(b.dataset.device, Number(b.dataset.slot), Number(b.dataset.owner || 0)));
-    const globalConfig = document.querySelector('[data-global-config]');
-    if (globalConfig) globalConfig.onclick = sendGlobalConfig;
-    const globalQr = document.querySelector('[data-global-qr]');
-    if (globalQr) globalQr.onclick = () => openQrModal(1, 0);
-    const globalRegen = document.querySelector('[data-global-regen]');
-    if (globalRegen) globalRegen.onclick = confirmRegenerate;
+    document.querySelectorAll('[data-go-plans]').forEach((b) => b.onclick = () => go('plans'));
   }
 
   async function openQrModal(slot=1, ownerId=0, freshNotice='') {
@@ -1138,10 +1133,6 @@
 
     $('qr-done').onclick = closeSheet;
     $('qr-send-files').onclick = async () => {
-      if (data.protocol === 'hysteria') {
-        sendGlobalConfig();
-        return;
-      }
       const act = ownerId ? 'family-get' : 'get';
       const r = await runAction('devices', {action:act, slot, owner_id:ownerId||undefined}, {progress:'Отправляем .conf файлы в чат…', notifySuccess:false});
       if (r) showDeliveryResult(r.message);
@@ -1161,17 +1152,13 @@
       notify('Выберите свой семейный слот для показа QR.');
       return;
     }
-    if (state.subscription.protocol === 'amneziawg') {
-      const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
-      if (own.length === 1) {
-        openQrModal(own[0].slot, 0);
-        return;
-      }
-      go('devices');
-      notify('Выберите устройство для показа большого QR.');
+    const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
+    if (own.length === 1) {
+      openQrModal(own[0].slot, 0);
       return;
     }
-    openQrModal(1, 0);
+    go('devices');
+    notify('Выберите устройство для показа большого QR.');
   }
 
   function openGuideSheet() {
@@ -1249,27 +1236,13 @@
       notify('Выберите свой семейный слот для перевыпуска.');
       return;
     }
-    if (state.subscription.protocol === 'amneziawg') {
-      const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
-      if (own.length === 1) {
-        devicePrompt('regenerate', own[0].slot, 0);
-        return;
-      }
-      go('devices');
-      notify('Выберите устройство для перевыпуска.');
+    const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
+    if (own.length === 1) {
+      devicePrompt('regenerate', own[0].slot, 0);
       return;
     }
-    openSheet(
-      'Перевыпустить доступ?',
-      'Старая ссылка сразу перестанет работать. Мы сразу покажем новый QR-код и отправим ссылку в бот.',
-      [
-        {id:'cancel', label:'Отмена', run:closeSheet},
-        {id:'go', label:'Перевыпустить', class:'danger', run:async()=>{
-          const r = await runAction('regenerate', {operation_id:operationId(), state_version:state.state_version}, {progress:'Безопасно перевыпускаем доступ…', notifySuccess:false});
-          if (r) await openQrModal(1, 0, 'Ключ обновлён · новая ссылка также отправлена в бот');
-        }},
-      ]
-    );
+    go('devices');
+    notify('Выберите устройство для перевыпуска.');
   }
 
   function devicePrompt(action, slot, ownerId=0) {
@@ -1298,8 +1271,8 @@
     const labels = {
       get: ['Отправить файлы в бот', `Файлы .conf и QR для «${device?.name||`Слот ${slot}`}» придут в чат с ботом.`, 'Отправить в бот'],
       regenerate: ['Перевыпустить ключ?', `Старый ключ устройства «${device?.name||`Слот ${slot}`}» перестанет работать. Новый QR сразу откроется здесь, а файлы .conf придут в бот.`, 'Перевыпустить'],
-      delete: ['Удалить устройство?', `Ключ «${device?.name||`Слот ${slot}`}» перестанет работать на основном и резервном сервере.`, 'Удалить'],
-      ['revoke-family']: ['Отозвать семейный доступ?', `Участник «${device?.member_name||device?.name||`Слот ${slot}`}» потеряет доступ на основном и резервном сервере.`, 'Отозвать'],
+      delete: ['Удалить устройство?', `Ключ «${device?.name||`Слот ${slot}`}» перестанет работать на всех серверах.`, 'Удалить'],
+      ['revoke-family']: ['Отозвать семейный доступ?', `Участник «${device?.member_name||device?.name||`Слот ${slot}`}» потеряет доступ на всех серверах.`, 'Отозвать'],
       ['cancel-invite']: ['Отменить приглашение?', 'Ссылка перестанет действовать, а слот снова станет свободным.', 'Отменить приглашение'],
       ['family-get']: ['Получить семейные настройки', `Файлы .conf и QR для «${device?.name||`Слот ${slot}`}» придут в ваш чат с ботом.`, 'Отправить в бот'],
       ['family-regenerate']: ['Перевыпустить семейный ключ?', `Только ваш ключ «${device?.name||`Слот ${slot}`}» перестанет работать. Новый QR сразу откроется здесь, а файлы придут в бот.`, 'Перевыпустить'],
@@ -1332,21 +1305,16 @@
   }
 
   async function sendGlobalConfig() {
-    if (state.access_mode === 'family_member' || state.subscription.protocol === 'amneziawg') {
-      const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal' || d.kind === 'family_member');
-      if (own.length === 1) {
-        const d = own[0];
-        const act = d.kind === 'family_member' ? 'family-get' : 'get';
-        const r = await runAction('devices', {action:act, slot:d.slot, owner_id:d.owner_id||undefined}, {progress:'Отправляем .conf файлы в чат…', notifySuccess:false});
-        if (r) showDeliveryResult(r.message);
-        return;
-      }
-      go('devices');
-      notify(state.access_mode === 'family_member' ? 'Выберите свой семейный слот.' : 'Выберите нужное устройство.');
+    const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal' || d.kind === 'family_member');
+    if (own.length === 1) {
+      const d = own[0];
+      const act = d.kind === 'family_member' ? 'family-get' : 'get';
+      const r = await runAction('devices', {action:act, slot:d.slot, owner_id:d.owner_id||undefined}, {progress:'Отправляем .conf файлы в чат…', notifySuccess:false});
+      if (r) showDeliveryResult(r.message);
       return;
     }
-    const r = await runAction('configs', {}, {progress:'Отправляем настройки в Telegram…', notifySuccess:false});
-    if (r) showDeliveryResult(r.message);
+    go('devices');
+    notify(state.access_mode === 'family_member' ? 'Выберите свой семейный слот.' : 'Выберите нужное устройство.');
   }
 
   async function load() {
