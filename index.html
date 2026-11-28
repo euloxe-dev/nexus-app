@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#cbb8a4">
+  <meta name="theme-color" id="meta-theme-color" content="#cbb8a4">
   <title>neXus Ray · ЛК</title>
-  <link rel="stylesheet" href="styles.css?v=29">
+  <link rel="stylesheet" href="styles.css?v=30">
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
 </head>
 <body>
@@ -39,6 +39,9 @@
     <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8L4 17a1.8 1.8 0 0 0 2.6 2.6l4.9-4.9a4.5 4.5 0 0 0 5.8-5.8l-2.5 2.5-2.6-2.6 2.5-2.5z"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13"/></symbol>
     <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18.4A2 2 0 0 0 3.5 21h17a2 2 0 0 0 1.7-2.6L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-unlink" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.5.5l2.1-2.1a5 5 0 0 0-7.1-7.1l-1.2 1.2M14 11a5 5 0 0 0-7.5-.5l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.2-1.2M4 4l16 16"/></symbol>
   </svg>
 
   <main id="app" class="shell">
@@ -71,6 +74,7 @@
           <button id="card-node-btn" class="node-pill" type="button" aria-label="Статус маршрутов подключения">
             <svg aria-hidden="true"><use href="#i-server"></use></svg>
             <b id="sub-node">Авто</b>
+            <i id="node-warn-dot" class="node-warn-dot" hidden aria-hidden="true"></i>
           </button>
           <button id="refresh" class="icon-button" aria-label="Обновить данные">
             <svg aria-hidden="true"><use href="#i-refresh"></use></svg>
@@ -112,6 +116,7 @@
           </div>
 
           <p id="grace-note" class="grace-note" hidden></p>
+          <button id="route-alert" class="route-alert" type="button" data-action="routes" hidden></button>
 
           <!-- Test-contract anchor + Quick Connect Buttons (for 1-device / family_member active) -->
           <span id="card-extend-btn" hidden></span>
@@ -281,6 +286,7 @@
 
         <div id="promo-banner" class="promo-banner" hidden></div>
         <div id="plan-change-box" class="plan-context" hidden></div>
+        <div id="plan-family-hint" class="plan-family-hint" hidden></div>
 
         <div id="pending-payment" class="pending-payment" hidden>
           <div>
@@ -347,6 +353,26 @@
             <button id="autorenew-toggle" class="ios-switch" type="button" role="switch" aria-checked="false" aria-label="Переключить автопродление">
               <span></span>
             </button>
+          </div>
+          <button id="unbind-method-btn" class="unbind-row" type="button" hidden>
+            <span class="action-icon danger" aria-hidden="true"><svg><use href="#i-unlink"></use></svg></span>
+            <div>
+              <b>Отвязать способ оплаты</b>
+              <small id="unbind-method-sub">Удалить сохранённый способ оплаты</small>
+            </div>
+            <em aria-hidden="true">›</em>
+          </button>
+          <div id="theme-row" class="toggle-row theme-row">
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-moon"></use></svg></span>
+            <div class="toggle-copy">
+              <b>Оформление</b>
+              <small id="theme-sub">Как в Telegram</small>
+            </div>
+            <div id="theme-pills" class="theme-pills" role="group" aria-label="Тема оформления">
+              <button type="button" data-theme-pref="auto">Авто</button>
+              <button type="button" data-theme-pref="light">День</button>
+              <button type="button" data-theme-pref="dark">Ночь</button>
+            </div>
           </div>
           <button id="profile-referral-btn" type="button">
             <span class="action-icon" aria-hidden="true"><svg><use href="#i-share"></use></svg></span>
@@ -436,6 +462,6 @@
     <b id="activity-text">Выполняем…</b>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=29"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

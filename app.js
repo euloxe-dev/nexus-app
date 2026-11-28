@@ -17,11 +17,58 @@
   if (tg) {
     tg.ready();
     tg.expand();
-    tg.setHeaderColor?.('#cbb8a4');
-    tg.setBackgroundColor?.('#cbb8a4');
-    tg.setBottomBarColor?.('#cbb8a4');
     if (tg.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes?.();
   }
+
+  const THEME_STORAGE_KEY = 'nexus_theme_pref';
+  const themeMedia = window.matchMedia?.('(prefers-color-scheme: dark)');
+  let themePref = 'auto';
+  try {
+    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (savedTheme === 'light' || savedTheme === 'dark' || savedTheme === 'auto') themePref = savedTheme;
+  } catch (_) {}
+
+  function resolveTheme(pref = themePref) {
+    if (pref === 'dark' || pref === 'light') return pref;
+    if (tg?.colorScheme === 'dark' || tg?.colorScheme === 'light') return tg.colorScheme;
+    return themeMedia?.matches ? 'dark' : 'light';
+  }
+
+  function applyTheme(pref = themePref, persist = false) {
+    themePref = (pref === 'light' || pref === 'dark') ? pref : 'auto';
+    if (persist) {
+      try { localStorage.setItem(THEME_STORAGE_KEY, themePref); } catch (_) {}
+    }
+    const resolved = resolveTheme(themePref);
+    document.documentElement.dataset.theme = resolved;
+    const chromeColor = resolved === 'dark' ? '#161310' : '#cbb8a4';
+    const metaTheme = $('meta-theme-color');
+    if (metaTheme) metaTheme.setAttribute('content', chromeColor);
+    tg?.setHeaderColor?.(chromeColor);
+    tg?.setBackgroundColor?.(chromeColor);
+    tg?.setBottomBarColor?.(chromeColor);
+
+    const themeSub = $('theme-sub');
+    if (themeSub) {
+      themeSub.textContent = themePref === 'auto'
+        ? `Как в Telegram (${resolved === 'dark' ? 'ночь' : 'день'})`
+        : themePref === 'dark'
+          ? 'Тёмная тема'
+          : 'Светлая тема';
+    }
+    document.querySelectorAll('#theme-pills [data-theme-pref]').forEach((btn) => {
+      const active = btn.dataset.themePref === themePref;
+      btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', String(active));
+    });
+    if (state) requestAnimationFrame(() => renderTrafficChart());
+  }
+
+  applyTheme(themePref, false);
+  tg?.onEvent?.('themeChanged', () => { if (themePref === 'auto') applyTheme('auto', false); });
+  themeMedia?.addEventListener?.('change', () => { if (themePref === 'auto') applyTheme('auto', false); });
+
+  const supportsNativeDownload = () => Boolean(tg?.isVersionAtLeast?.('8.0') && typeof tg?.downloadFile === 'function');
 
   const haptic = (kind = 'light') => tg?.HapticFeedback?.impactOccurred?.(kind);
   const hapticSelect = () => tg?.HapticFeedback?.selectionChanged?.();
@@ -674,15 +721,39 @@
 
     const nodeBtn = $('card-node-btn');
     const nodeEl = $('sub-node');
+    const nodeWarnDot = $('node-warn-dot');
+    const routeAlertEl = $('route-alert');
+    const routes = Array.isArray(sub.routes) ? sub.routes : [];
+    const primaryRoute = routes.find((r) => r.role === 'primary');
+    const primaryDegraded = isActive && primaryRoute?.status === 'degraded';
     if (nodeEl) {
-      const primaryRoute = (sub.routes || []).find((r) => r.role === 'primary');
       nodeEl.textContent = primaryRoute
         ? `${primaryRoute.country} ${primaryRoute.flag || ''}`.trim()
         : nodeLabel(sub.server?.node, inactive);
     }
     if (nodeBtn) {
-      nodeBtn.disabled = isNone && !(sub.routes || []).length;
+      nodeBtn.disabled = isNone && !routes.length;
+      nodeBtn.classList.toggle('degraded', primaryDegraded);
     }
+    if (nodeWarnDot) nodeWarnDot.hidden = !primaryDegraded;
+    if (routeAlertEl) {
+      if (primaryDegraded) {
+        const healthyAlt = routes.find((r) => r.role !== 'primary' && r.status === 'ok')
+          || routes.find((r) => r.role !== 'primary');
+        const hint = healthyAlt
+          ? `переключите тумблер на ${healthyAlt.country}`
+          : 'проверьте резервные маршруты';
+        routeAlertEl.hidden = false;
+        routeAlertEl.innerHTML = `<span class="route-alert-left">${icon('alert')}<span>На основном маршруте (${esc(primaryRoute.country)}) просадка в РФ — ${esc(hint)}</span></span><em aria-hidden="true">›</em>`;
+      } else {
+        routeAlertEl.hidden = true;
+      }
+    }
+
+    // Native direct ZIP download label on Telegram 8.0+
+    const canDownload = supportsNativeDownload();
+    if ($('quick-config-title')) $('quick-config-title').textContent = canDownload ? 'Скачать .zip' : 'Файлы в бот';
+    if ($('quick-config-sub')) $('quick-config-sub').textContent = canDownload ? 'прямо на телефон' : '.conf в чат';
 
     // Free 24h Trial CTA (only for eligible new users)
     const trialCta = $('trial-cta');
@@ -982,15 +1053,26 @@
         }))
       : [{ slot: 1, name: 'Основное устройство', rawSeries: null }];
 
-    const palette = [
-      { stroke: '#0f9d7a', fillTop: 'rgba(15, 157, 122, 0.28)', fillBottom: 'rgba(15, 157, 122, 0.0)' },
-      { stroke: '#ea580c', fillTop: 'rgba(234, 88, 12, 0.24)', fillBottom: 'rgba(234, 88, 12, 0.0)' },
-      { stroke: '#191715', fillTop: 'rgba(25, 23, 21, 0.16)', fillBottom: 'rgba(25, 23, 21, 0.0)' },
-      { stroke: '#6366f1', fillTop: 'rgba(99, 102, 241, 0.20)', fillBottom: 'rgba(99, 102, 241, 0.0)' },
-      { stroke: '#d97706', fillTop: 'rgba(217, 119, 6, 0.20)', fillBottom: 'rgba(217, 119, 6, 0.0)' },
-      { stroke: '#db2777', fillTop: 'rgba(219, 39, 119, 0.18)', fillBottom: 'rgba(219, 39, 119, 0.0)' },
-      { stroke: '#0284c7', fillTop: 'rgba(2, 132, 199, 0.18)', fillBottom: 'rgba(2, 132, 199, 0.0)' },
-    ];
+    const isDark = document.documentElement.dataset.theme === 'dark';
+    const palette = isDark
+      ? [
+          { stroke: '#2dd4a8', fillTop: 'rgba(45, 212, 168, 0.30)', fillBottom: 'rgba(45, 212, 168, 0.0)' },
+          { stroke: '#fb923c', fillTop: 'rgba(251, 146, 60, 0.26)', fillBottom: 'rgba(251, 146, 60, 0.0)' },
+          { stroke: '#ece3d8', fillTop: 'rgba(236, 227, 216, 0.22)', fillBottom: 'rgba(236, 227, 216, 0.0)' },
+          { stroke: '#818cf8', fillTop: 'rgba(129, 140, 248, 0.24)', fillBottom: 'rgba(129, 140, 248, 0.0)' },
+          { stroke: '#fbbf24', fillTop: 'rgba(251, 191, 36, 0.22)', fillBottom: 'rgba(251, 191, 36, 0.0)' },
+          { stroke: '#f472b6', fillTop: 'rgba(244, 114, 182, 0.22)', fillBottom: 'rgba(244, 114, 182, 0.0)' },
+          { stroke: '#38bdf8', fillTop: 'rgba(56, 189, 248, 0.22)', fillBottom: 'rgba(56, 189, 248, 0.0)' },
+        ]
+      : [
+          { stroke: '#0f9d7a', fillTop: 'rgba(15, 157, 122, 0.28)', fillBottom: 'rgba(15, 157, 122, 0.0)' },
+          { stroke: '#ea580c', fillTop: 'rgba(234, 88, 12, 0.24)', fillBottom: 'rgba(234, 88, 12, 0.0)' },
+          { stroke: '#191715', fillTop: 'rgba(25, 23, 21, 0.16)', fillBottom: 'rgba(25, 23, 21, 0.0)' },
+          { stroke: '#6366f1', fillTop: 'rgba(99, 102, 241, 0.20)', fillBottom: 'rgba(99, 102, 241, 0.0)' },
+          { stroke: '#d97706', fillTop: 'rgba(217, 119, 6, 0.20)', fillBottom: 'rgba(217, 119, 6, 0.0)' },
+          { stroke: '#db2777', fillTop: 'rgba(219, 39, 119, 0.18)', fillBottom: 'rgba(219, 39, 119, 0.0)' },
+          { stroke: '#0284c7', fillTop: 'rgba(2, 132, 199, 0.18)', fillBottom: 'rgba(2, 132, 199, 0.0)' },
+        ];
 
     const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
     const serverDays = Array.isArray(state.traffic_days) && state.traffic_days.length === 7 ? state.traffic_days : null;
@@ -1368,6 +1450,7 @@
     // Trial users on 24h test can directly purchase 1 / 3 / 7 devices without forced change_plan!
     const changing = hasActiveSub && !isTrial && selectedDevices !== current;
     const context = $('plan-change-box');
+    const familyHint = $('plan-family-hint');
     const captionEl = $('plans-subtitle');
     const listEl = $('plans-list');
     const selectedOption = state.plan_change?.[String(selectedDevices)] || { allowed: true, reason: '', affected: [] };
@@ -1377,7 +1460,17 @@
     const affectedSlots = Array.isArray(selectedOption.affected) ? selectedOption.affected : [];
     const expiredDowngradeConfirm = !hasActiveSub && !familyMember && !blockedByFamily && (selectedOption.needs_confirm || (!selectedOption.allowed && affectedSlots.length > 0));
 
+    const renderFamilyHint = (show) => {
+      if (!familyHint) return;
+      if (!show) { familyHint.hidden = true; return; }
+      const p12 = state.plans?.find((p) => p.months === 12)?.prices?.find((p) => p.devices === 7);
+      const perDev = p12 ? Math.max(1, Math.round(p12.amount / 12 / 7)) : 83;
+      familyHint.hidden = false;
+      familyHint.innerHTML = `<span class="plan-family-hint-icon" aria-hidden="true">${icon('family')}</span><div><strong>Семья и друзья · от ≈${perDev}\u00A0₽/мес. за устройство</strong><span>Подключите свои гаджеты и выдайте до 6 отдельных приватных ключей близким прямо из «Устройств».</span></div>`;
+    };
+
     if (changing) {
+      renderFamilyHint(selectedDevices === 7 && !familyMember && sub.status !== 'frozen');
       const frozen = sub.status === 'frozen';
       const oldItem = state.plans?.find((p) => p.months === 1)?.prices?.find((p) => p.devices === current);
       const newItem = state.plans?.find((p) => p.months === 1)?.prices?.find((p) => p.devices === selectedDevices);
@@ -1397,6 +1490,7 @@
     }
 
     if (!selectedOption.allowed && !expiredDowngradeConfirm) {
+      renderFamilyHint(false);
       context.hidden = false;
       context.className = 'plan-context blocked';
       context.innerHTML = blockedByFamily
@@ -1427,6 +1521,8 @@
       context.hidden = true;
       if (captionEl) captionEl.textContent = hasActiveSub ? 'Дни суммируются с текущим остатком.' : 'Выберите количество устройств и период.';
     }
+
+    renderFamilyHint(selectedDevices === 7 && !familyMember && !expiredDowngradeConfirm);
 
     const defaultPct = { 1: 0, 3: 8, 6: 17, 12: 27 };
     if (listEl) {
@@ -1485,9 +1581,10 @@
         ? `${famTotal}\u00A0${pluralRu(famTotal, 'место', 'места', 'мест')}`
         : 'Нет';
 
-    // Autorenew row (only for personal subscribers when backend exposes sub.autorenew)
+    // Autorenew & Unbind payment method rows (only for personal subscribers)
     const arRow = $('autorenew-row');
     const arToggle = $('autorenew-toggle');
+    const unbindBtn = $('unbind-method-btn');
     if (arRow && arToggle) {
       if (!familyMember && sub.autorenew && typeof sub.autorenew.enabled === 'boolean') {
         arRow.hidden = false;
@@ -1501,6 +1598,16 @@
         arRow.hidden = true;
       }
     }
+    if (unbindBtn) {
+      const canUnbind = Boolean(!familyMember && sub.autorenew?.has_method);
+      unbindBtn.hidden = !canUnbind;
+      if (canUnbind && $('unbind-method-sub')) {
+        $('unbind-method-sub').textContent = sub.autorenew.method_title
+          ? `Удалить ${sub.autorenew.method_title} и выключить автосписание`
+          : 'Удалить сохранённый способ оплаты';
+      }
+    }
+    applyTheme(themePref, false);
 
     const rows = state.payment_history || [];
     $('payment-history').innerHTML = rows.length
@@ -1831,6 +1938,54 @@
     }
   }
 
+  async function downloadConfigZipDirect(slot, ownerId = 0) {
+    if (!supportsNativeDownload()) {
+      const act = ownerId ? 'family-get' : 'get';
+      const r = await runAction('devices', { action: act, slot, owner_id: ownerId || undefined }, { progress: 'Отправляем архив в чат…', notifySuccess: false });
+      if (r) showDeliveryResult(r.message);
+      return;
+    }
+    setActivity('Готовим архив neXusRay.zip…');
+    try {
+      const r = await api('download-token', {
+        method: 'POST',
+        body: JSON.stringify({ slot, owner_id: ownerId || undefined }),
+      });
+      setActivity('');
+      const url = r?.url || (r?.download_path ? `${API_BASES[0].replace(/\/nexus\/api\/?$/, '')}${r.download_path}` : '');
+      if (!url) throw new Error('download_unavailable');
+      tg.downloadFile({ url, file_name: r.file_name || 'neXusRay.zip' }, (accepted) => {
+        if (accepted) {
+          haptic('light');
+          notify('Сохраняем neXusRay.zip — откройте его в AmneziaWG или EX WG');
+        }
+      });
+    } catch (_) {
+      setActivity('');
+      // Graceful fallback to bot chat delivery if endpoint unavailable or download fails
+      const act = ownerId ? 'family-get' : 'get';
+      const r = await runAction('devices', { action: act, slot, owner_id: ownerId || undefined }, { progress: 'Отправляем архив в чат…', notifySuccess: false });
+      if (r) showDeliveryResult(r.message);
+    }
+  }
+
+  function confirmUnbindPaymentMethod() {
+    const title = state?.subscription?.autorenew?.method_title || 'сохранённый способ оплаты';
+    openSheet(
+      'Отвязать способ оплаты?',
+      `Мы удалим привязку (${title}) и выключим автопродление. Текущая подписка и оплаченные дни продолжат работать как обычно.`,
+      [
+        { id: 'cancel', label: 'Отмена', run: closeSheet },
+        {
+          id: 'unbind',
+          label: 'Отвязать',
+          class: 'danger',
+          run: () => runAction('autorenew', { enabled: false, unbind: true }, { progress: 'Отвязываем способ оплаты…' }),
+        },
+      ]
+    );
+  }
+
   async function openQrModal(slot = 1, ownerId = 0, freshNotice = '') {
     const data = await runAction('qr', { slot, owner_id: ownerId || undefined }, { refresh: false, progress: 'Готовим большой QR-код…', notifySuccess: false });
     if (!data || !data.items?.length) return;
@@ -1879,11 +2034,12 @@
         <div class="qr-hint">Приложение <b>EX WG</b> или <b>AmneziaWG</b> → <b>«+»</b> → <b>Сканировать QR-код</b></div>
       </div>
       <div class="sheet-actions">
-        <button type="button" id="qr-send-files">Архив в бот</button>
+        <button type="button" id="qr-send-files">${supportsNativeDownload() ? 'Скачать .zip' : 'Архив в бот'}</button>
         <button type="button" class="primary" id="qr-done">Готово</button>
       </div>
       <div class="qr-separate-row">
-        <button type="button" class="qr-separate-btn" id="qr-send-separate">Отправить файлы .conf по отдельности</button>
+        ${supportsNativeDownload() ? '<button type="button" class="qr-separate-btn" id="qr-send-bot">Архив в бот</button>' : ''}
+        <button type="button" class="qr-separate-btn" id="qr-send-separate">Файлы .conf по отдельности</button>
       </div>`;
 
     const tabsEl = $('qr-tabs');
@@ -1962,7 +2118,8 @@
     };
 
     $('qr-done').onclick = closeSheet;
-    $('qr-send-files').onclick = () => sendFiles(false);
+    $('qr-send-files').onclick = () => (supportsNativeDownload() ? downloadConfigZipDirect(slot, ownerId) : sendFiles(false));
+    if ($('qr-send-bot')) $('qr-send-bot').onclick = () => sendFiles(false);
     $('qr-send-separate').onclick = () => sendFiles(true);
     showSheetModal($('qr-done'));
   }
@@ -2164,6 +2321,30 @@
     const [title, text, label] = labels[action];
     const isDanger = ['delete', 'regenerate', 'revoke-family', 'cancel-invite', 'family-regenerate', 'family-leave'].includes(action);
     const isGet = action === 'get' || action === 'family-get';
+    if (isGet && supportsNativeDownload()) {
+      resetSheetTransform();
+      $('sheet-content').innerHTML = `
+        <h2 id="sheet-title">Файлы подключения</h2>
+        <p>Скачайте <b>neXusRay.zip</b> для «${esc(device?.name || `Место ${slot}`)}» прямо на телефон (удобно на iPhone) или отправьте файлы в чат с ботом.</p>
+        <div class="sheet-pay-stack">
+          <button type="button" class="sbp-primary" id="dl-direct-zip">Скачать neXusRay.zip</button>
+          <button type="button" id="dl-bot-zip">Отправить архив в бот</button>
+          <button type="button" id="dl-bot-sep">Отдельные .conf в бот</button>
+          <button type="button" class="cancel-link" id="dl-cancel">Отмена</button>
+        </div>`;
+      $('dl-direct-zip').onclick = async () => { closeSheet(); await downloadConfigZipDirect(slot, ownerId); };
+      $('dl-bot-zip').onclick = async () => {
+        const r = await runAction('devices', { action, slot, owner_id: ownerId || undefined }, { progress: 'Отправляем архив в чат…', notifySuccess: false });
+        if (r) showDeliveryResult(r.message);
+      };
+      $('dl-bot-sep').onclick = async () => {
+        const r = await runAction('devices', { action, slot, owner_id: ownerId || undefined, separate_files: true }, { progress: 'Отправляем отдельные .conf…', notifySuccess: false });
+        if (r) showDeliveryResult(r.message);
+      };
+      $('dl-cancel').onclick = closeSheet;
+      showSheetModal($('dl-direct-zip'));
+      return;
+    }
     const actions = [
       { id: 'cancel', label: 'Отмена', run: closeSheet },
       ...(isGet ? [{
@@ -2211,6 +2392,10 @@
     const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal' || d.kind === 'family_member');
     if (own.length === 1) {
       const d = own[0];
+      if (supportsNativeDownload()) {
+        await downloadConfigZipDirect(d.slot, d.owner_id || 0);
+        return;
+      }
       const act = d.kind === 'family_member' ? 'family-get' : 'get';
       const r = await runAction('devices', { action: act, slot: d.slot, owner_id: d.owner_id || undefined }, { progress: 'Отправляем архив в чат…', notifySuccess: false });
       if (r) showDeliveryResult(r.message);
@@ -2370,6 +2555,13 @@
       await runAction('autorenew', { enabled: !current }, { progress: !current ? 'Включаем автопродление…' : 'Выключаем автопродление…' });
     };
   }
+  if ($('unbind-method-btn')) $('unbind-method-btn').onclick = confirmUnbindPaymentMethod;
+  document.querySelectorAll('#theme-pills [data-theme-pref]').forEach((btn) => {
+    btn.onclick = () => {
+      hapticSelect();
+      applyTheme(btn.dataset.themePref, true);
+    };
+  });
 
   if ($('metric-freeze-btn')) $('metric-freeze-btn').onclick = openFreezeInfoSheet;
   if ($('metric-referral-btn')) $('metric-referral-btn').onclick = openReferralSheet;
