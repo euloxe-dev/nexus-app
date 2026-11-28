@@ -586,16 +586,49 @@ button:not(:disabled):active,
   align-items: center;
   gap: 5px;
   min-width: 0;
-  max-width: min(44vw, 175px);
-  height: 26px;
-  padding: 0 9px;
-  border: 1px solid rgba(255, 255, 255, 0.88);
+  max-width: min(46vw, 185px);
+  height: 28px;
+  padding: 0 8px 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.90);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.80);
-  box-shadow: 0 2px 6px rgba(32, 22, 12, 0.06);
+  background: var(--white-pill);
+  box-shadow: 0 3px 9px rgba(32, 22, 12, 0.10);
   color: var(--text);
-  font-size: 10.5px;
+  font-size: 11px;
   flex: 0 1 auto;
+}
+
+.node-pill:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.node-status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--emerald);
+  box-shadow: 0 0 0 2px var(--emerald-tint);
+  flex: none;
+}
+
+.node-status-dot.degraded {
+  background: var(--amber);
+  box-shadow: 0 0 0 2px var(--amber-tint);
+}
+
+.node-status-dot.unknown {
+  background: var(--subtle);
+  box-shadow: none;
+}
+
+.node-chevron {
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  margin-left: -1px;
+  flex: none;
 }
 
 .node-pill::after {
@@ -3243,6 +3276,146 @@ button:not(:disabled):active,
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
+}
+
+/* V31: PER-DEVICE ROUTES STRIP & MULTI-LOCATION ROUTES SHEET */
+.device-routes-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.device-routes-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-routes-btn em {
+  color: var(--subtle);
+  font-style: normal;
+  font-size: 13px;
+  font-weight: 700;
+  flex: none;
+}
+
+.routes-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin-top: 10px;
+  padding: 3px;
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+  background: rgba(24, 21, 18, 0.06);
+}
+
+.routes-tabs button {
+  height: 30px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.routes-tabs button.active {
+  background: var(--obsidian);
+  color: var(--obsidian-ink);
+  box-shadow: 0 2px 6px rgba(24, 20, 16, 0.16);
+}
+
+.route-device-group {
+  padding: 10px 11px;
+  border: 1px solid var(--glass-line);
+  border-radius: 15px;
+  background: var(--glass);
+}
+
+.route-device-group.focused {
+  border-color: rgba(15, 157, 122, 0.45);
+  box-shadow: 0 0 0 1px rgba(15, 157, 122, 0.18);
+}
+
+.route-device-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+.route-device-group-head strong {
+  font-size: 12.5px;
+  font-weight: 750;
+  color: var(--text);
+}
+
+.route-device-group-head span {
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.route-device-sublist {
+  display: grid;
+  gap: 5px;
+}
+
+.route-mini-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.56);
+  font-size: 11.5px;
+}
+
+.route-mini-row b {
+  font-weight: 700;
+  color: var(--text);
+}
+
+.route-mini-row small {
+  color: var(--muted);
+  font-size: 10.5px;
+  margin-left: 4px;
+}
+
+html[data-theme="dark"] .routes-tabs {
+  border-color: rgba(255, 246, 236, 0.10);
+  background: rgba(255, 246, 236, 0.07);
+}
+
+html[data-theme="dark"] .route-device-group {
+  border-color: rgba(255, 246, 236, 0.10);
+  background: rgba(48, 43, 38, 0.78);
+}
+
+html[data-theme="dark"] .route-device-group.focused {
+  border-color: rgba(25, 182, 142, 0.50);
+}
+
+html[data-theme="dark"] .route-mini-row {
+  background: rgba(62, 56, 50, 0.74);
+}
+
+html[data-theme="dark"] .route-item {
+  border-color: rgba(255, 246, 236, 0.10);
+  background: rgba(48, 43, 38, 0.78);
 }
 
 /* V30: ROUTE DEGRADATION ALERT ON HOME & NODE WARNING DOT */

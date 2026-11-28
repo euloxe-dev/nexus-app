@@ -719,32 +719,53 @@
     const devEl = $('sub-devices');
     if (devEl) devEl.textContent = familyMember ? slotWord(sub.occupied_slots || 1) : `${sub.occupied_slots} / ${sub.device_limit}`;
 
+    const routesModel = collectRoutesModel();
     const nodeBtn = $('card-node-btn');
     const nodeEl = $('sub-node');
-    const nodeWarnDot = $('node-warn-dot');
+    const nodeDot = $('node-status-dot');
+    const nodeChevron = $('node-chevron');
     const routeAlertEl = $('route-alert');
-    const routes = Array.isArray(sub.routes) ? sub.routes : [];
-    const primaryRoute = routes.find((r) => r.role === 'primary');
-    const primaryDegraded = isActive && primaryRoute?.status === 'degraded';
+
+    const hasRoutes = routesModel.uniqueRoutes.length > 0;
+    const anyDegraded = isActive && routesModel.anyDegraded;
+    const allUnknown = hasRoutes && routesModel.uniqueRoutes.every((r) => (r.status || 'unknown') === 'unknown');
+
     if (nodeEl) {
-      nodeEl.textContent = primaryRoute
-        ? `${primaryRoute.country} ${primaryRoute.flag || ''}`.trim()
-        : nodeLabel(sub.server?.node, inactive);
+      if (isNone && !hasRoutes) {
+        nodeEl.textContent = 'Не активна';
+      } else if (routesModel.hasMultiDeviceDiff) {
+        const n = routesModel.uniqueRoutes.length;
+        nodeEl.textContent = `${n}\u00A0${pluralRu(n, 'страна', 'страны', 'стран')}`;
+      } else if (routesModel.uniquePrimaries.length === 1) {
+        const p = routesModel.uniquePrimaries[0];
+        nodeEl.textContent = `${p.country} ${p.flag || ''}`.trim();
+      } else if (hasRoutes) {
+        const first = routesModel.uniqueRoutes[0];
+        nodeEl.textContent = `${first.country} ${first.flag || ''}`.trim();
+      } else {
+        nodeEl.textContent = nodeLabel(sub.server?.node, inactive);
+      }
     }
     if (nodeBtn) {
-      nodeBtn.disabled = isNone && !routes.length;
-      nodeBtn.classList.toggle('degraded', primaryDegraded);
+      nodeBtn.disabled = isNone && !hasRoutes;
+      nodeBtn.classList.toggle('degraded', anyDegraded);
     }
-    if (nodeWarnDot) nodeWarnDot.hidden = !primaryDegraded;
+    if (nodeDot) {
+      nodeDot.hidden = !isActive || !hasRoutes;
+      nodeDot.className = `node-status-dot${anyDegraded ? ' degraded' : allUnknown ? ' unknown' : ''}`;
+    }
+    if (nodeChevron) nodeChevron.hidden = isNone && !hasRoutes;
+
     if (routeAlertEl) {
-      if (primaryDegraded) {
-        const healthyAlt = routes.find((r) => r.role !== 'primary' && r.status === 'ok')
-          || routes.find((r) => r.role !== 'primary');
+      if (isActive && routesModel.degradedPrimaries.length > 0) {
+        const badNames = routesModel.degradedPrimaries.map((r) => r.country).join(', ');
+        const healthyAlt = routesModel.uniqueRoutes.find((r) => r.status === 'ok' && !routesModel.degradedPrimaries.some((d) => d.country === r.country))
+          || routesModel.uniqueRoutes.find((r) => !routesModel.degradedPrimaries.some((d) => d.country === r.country));
         const hint = healthyAlt
           ? `переключите тумблер на ${healthyAlt.country}`
           : 'проверьте резервные маршруты';
         routeAlertEl.hidden = false;
-        routeAlertEl.innerHTML = `<span class="route-alert-left">${icon('alert')}<span>На основном маршруте (${esc(primaryRoute.country)}) просадка в РФ — ${esc(hint)}</span></span><em aria-hidden="true">›</em>`;
+        routeAlertEl.innerHTML = `<span class="route-alert-left">${icon('alert')}<span>На маршруте (${esc(badNames)}) просадка в РФ — ${esc(hint)}</span></span><em aria-hidden="true">›</em>`;
       } else {
         routeAlertEl.hidden = true;
       }
@@ -1232,6 +1253,92 @@
     updateTrafficSelectionInPlace();
   }
 
+  function getDeviceRoutes(device) {
+    if (Array.isArray(device?.routes) && device.routes.length) return device.routes;
+    if (Array.isArray(state?.subscription?.routes) && state.subscription.routes.length) return state.subscription.routes;
+    return [];
+  }
+
+  function collectRoutesModel() {
+    const sub = state?.subscription || {};
+    const subRoutes = Array.isArray(sub.routes) ? sub.routes : [];
+    const configured = (state?.devices || []).filter((d) => d && d.configured !== false && d.kind !== 'family_pending');
+    const byDevice = [];
+    for (const dev of configured) {
+      const rList = getDeviceRoutes(dev);
+      if (!rList.length) continue;
+      byDevice.push({
+        slot: dev.slot,
+        name: dev.kind === 'family' ? (dev.member_name || dev.name || `Место ${dev.slot}`) : (dev.name || `Место ${dev.slot}`),
+        kind: dev.kind || 'personal',
+        routes: rList,
+      });
+    }
+    if (!byDevice.length && subRoutes.length) {
+      byDevice.push({ slot: 1, name: 'Основное устройство', kind: 'personal', routes: subRoutes });
+    }
+
+    const roleOrder = { primary: 0, reserve: 1, edge: 2 };
+    const uniqueMap = new Map();
+    const primaryMap = new Map();
+    const signatures = new Set();
+
+    for (const d of byDevice) {
+      const sig = d.routes.map((r) => `${r.role}:${r.node || r.country}`).join('|');
+      signatures.add(sig);
+      for (const r of d.routes) {
+        const key = String(r.node || r.country || '').toUpperCase();
+        if (!key) continue;
+        if (!uniqueMap.has(key)) {
+          uniqueMap.set(key, {
+            role: r.role || 'primary',
+            title: r.title || 'Маршрут',
+            country: r.country || key,
+            flag: r.flag || '',
+            node: r.node || '',
+            filename: r.filename || '',
+            status: r.status || 'unknown',
+            status_label: r.status_label || 'Проверяется',
+            devices: [],
+            roleRank: roleOrder[r.role] ?? 9,
+          });
+        }
+        const entry = uniqueMap.get(key);
+        entry.roleRank = Math.min(entry.roleRank, roleOrder[r.role] ?? 9);
+        if (r.status === 'degraded') {
+          entry.status = 'degraded';
+          entry.status_label = r.status_label || 'Просадки в РФ';
+        }
+        if (!entry.devices.some((x) => x.slot === d.slot && x.role === r.role)) {
+          entry.devices.push({ slot: d.slot, name: d.name, role: r.role, title: r.title || 'Маршрут' });
+        }
+        if (r.role === 'primary' && !primaryMap.has(key)) {
+          primaryMap.set(key, entry);
+        }
+      }
+    }
+
+    const uniqueRoutes = [...uniqueMap.values()].sort((a, b) => {
+      if (a.roleRank !== b.roleRank) return a.roleRank - b.roleRank;
+      return a.country.localeCompare(b.country, 'ru');
+    });
+    const uniquePrimaries = [...primaryMap.values()];
+    const degradedPrimaries = uniquePrimaries.filter((r) => r.status === 'degraded');
+    const anyDegraded = uniqueRoutes.some((r) => r.status === 'degraded');
+    const hasMultiDeviceDiff = byDevice.length > 1 && (signatures.size > 1 || uniqueRoutes.length > 3);
+
+    return { byDevice, uniqueRoutes, uniquePrimaries, degradedPrimaries, anyDegraded, hasMultiDeviceDiff };
+  }
+
+  function renderDeviceRoutesHtml(device) {
+    const dRoutes = getDeviceRoutes(device);
+    if (!dRoutes.length) {
+      return '<span>3 маршрута · основной, резерв и доп.</span>';
+    }
+    const text = dRoutes.map((r) => `${r.flag ? `${r.flag}\u00A0` : ''}${r.country}`).join(' · ');
+    return `<button type="button" class="device-routes-btn" data-device-routes="${device.slot}" aria-label="Показать маршруты устройства"><span>${esc(text)}</span><em aria-hidden="true">›</em></button>`;
+  }
+
   function renderDeviceMetaHtml(device, subStatus) {
     const pills = [];
     const st = fmtLastOnline(device, subStatus);
@@ -1279,14 +1386,14 @@
       return `<article class="device-card family member">
         <div class="device-top">
           <div class="device-icon" aria-hidden="true">${icon('family')}</div>
-          <div class="device-copy"><small>Семейное место ${device.slot}</small><strong>${esc(device.name)}</strong><span>Владелец: ${esc(device.owner_name)}</span></div>
+          <div class="device-copy"><small>Семейное место ${device.slot} · ${esc(device.owner_name)}</small><strong>${esc(device.name)}</strong>${renderDeviceRoutesHtml(device)}</div>
           <i class="device-state${active ? (st.dot ? ` ${st.dot}` : '') : ' waiting'}" role="img" aria-label="${active ? st.text : 'Ожидает'}"></i>
         </div>
         ${renderDeviceMetaHtml(device, sub.status)}
         <div class="device-note">${note}</div>
         <div class="device-buttons">
           <button type="button" class="accent" data-device="family-qr" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('qr')} Большой QR</button>
-          <button type="button" class="accent" data-device="family-get" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('download')} Файлы в бот</button>
+          <button type="button" class="accent" data-device="family-get" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('download')} ${supportsNativeDownload() ? 'Скачать .zip' : 'Файлы в бот'}</button>
           <button type="button" data-device="family-rename" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('edit')} Имя</button>
           <button type="button" data-device="family-regenerate" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('refresh')} Сброс</button>
           <button type="button" class="danger" data-device="family-leave" data-slot="${device.slot}" data-owner="${device.owner_id}">Выйти</button>
@@ -1299,7 +1406,7 @@
       return `<article class="device-card family">
         <div class="device-top">
           <div class="device-icon" aria-hidden="true">${icon('family')}</div>
-          <div class="device-copy"><small>Место ${device.slot} · Семья</small><strong>${esc(device.member_name || device.name)}</strong><span>Отдельный ключ участника</span></div>
+          <div class="device-copy"><small>Место ${device.slot} · Семья</small><strong>${esc(device.member_name || device.name)}</strong>${renderDeviceRoutesHtml(device)}</div>
           <i class="device-state${st.dot ? ` ${st.dot}` : ''}" role="img" aria-label="${esc(st.text)}"></i>
         </div>
         ${renderDeviceMetaHtml(device, sub.status)}
@@ -1327,13 +1434,13 @@
     return `<article class="device-card">
       <div class="device-top">
         <div class="device-icon" aria-hidden="true">${icon('phone')}</div>
-        <div class="device-copy"><small>Место ${device.slot}</small><strong>${esc(device.name)}</strong><span>3 маршрута · основной, резерв и доп.</span></div>
+        <div class="device-copy"><small>Место ${device.slot}</small><strong>${esc(device.name)}</strong>${renderDeviceRoutesHtml(device)}</div>
         <i class="device-state${st.dot ? ` ${st.dot}` : ''}" role="img" aria-label="${esc(st.text)}"></i>
       </div>
       ${renderDeviceMetaHtml(device, sub.status)}
       <div class="device-buttons">
         <button type="button" class="accent" data-device="qr" data-slot="${device.slot}"${dis}>${icon('qr')} Большой QR</button>
-        <button type="button" class="accent" data-device="get" data-slot="${device.slot}"${dis}>${icon('download')} Файлы в бот</button>
+        <button type="button" class="accent" data-device="get" data-slot="${device.slot}"${dis}>${icon('download')} ${supportsNativeDownload() ? 'Скачать .zip' : 'Файлы в бот'}</button>
         <button type="button" data-device="rename" data-slot="${device.slot}"${dis}>${icon('edit')} Имя</button>
         <button type="button" data-device="regenerate" data-slot="${device.slot}"${dis}>${icon('refresh')} Сброс</button>
         <button type="button" class="danger" data-device="delete" data-slot="${device.slot}"${device.slot === 1 || !isSubActive ? ' disabled' : ''}>${icon('trash')} Удалить</button>
@@ -1607,6 +1714,13 @@
           : 'Удалить сохранённый способ оплаты';
       }
     }
+    const routesModel = collectRoutesModel();
+    if ($('profile-routes-sub')) {
+      const n = routesModel.uniqueRoutes.length;
+      $('profile-routes-sub').textContent = n
+        ? `${n}\u00A0${pluralRu(n, 'страна', 'страны', 'стран')}${routesModel.byDevice.length > 1 ? ` на ${routesModel.byDevice.length}\u00A0устр.` : ''}`
+        : 'Доступность ваших локаций';
+    }
     applyTheme(themePref, false);
 
     const rows = state.payment_history || [];
@@ -1679,6 +1793,9 @@
     document.querySelectorAll('[data-open-support]').forEach((b) => {
       b.onclick = () => openSupport();
     });
+    document.querySelectorAll('[data-device-routes]').forEach((b) => {
+      b.onclick = () => openRoutesSheet(Number(b.dataset.deviceRoutes) || 0);
+    });
   }
 
   function shareTelegramLink(url, text) {
@@ -1691,37 +1808,83 @@
     if (state?.support_url) openTgUrl(state.support_url);
   }
 
-  function openRoutesSheet() {
+  function openRoutesSheet(focusSlot = 0) {
     if (!state) return;
     sendEvent('routes', true);
     const sub = state.subscription || {};
-    const routes = Array.isArray(sub.routes) && sub.routes.length
-      ? sub.routes
-      : sub.server?.node
-        ? [{ role: 'primary', title: 'Основной маршрут', country: nodeLabel(sub.server.node, false), flag: '', node: String(sub.server.node).toUpperCase(), filename: '', status: 'ok', status_label: 'Активен' }]
-        : [];
+    const model = collectRoutesModel();
+    const fallbackRoutes = !model.uniqueRoutes.length && sub.server?.node
+      ? [{ role: 'primary', title: 'Основной маршрут', country: nodeLabel(sub.server.node, false), flag: '', node: String(sub.server.node).toUpperCase(), filename: '', status: 'ok', status_label: 'Активен', devices: [] }]
+      : model.uniqueRoutes;
+    const showTabs = model.hasMultiDeviceDiff;
+    let activeTab = focusSlot > 0 && showTabs ? 'devices' : 'all';
+
+    const renderRoutesBody = () => {
+      const listHtml = !fallbackRoutes.length
+        ? '<div class="empty-history">Маршруты появятся сразу после активации подписки.</div>'
+        : activeTab === 'devices' && showTabs
+          ? model.byDevice.map((dev) => `
+              <div class="route-device-group${focusSlot === dev.slot ? ' focused' : ''}" data-route-slot="${dev.slot}">
+                <div class="route-device-group-head">
+                  <strong>${esc(dev.name)}</strong>
+                  <span>Место ${dev.slot}${dev.kind === 'family' ? ' · Семья' : ''}</span>
+                </div>
+                <div class="route-device-sublist">
+                  ${dev.routes.map((r) => `
+                    <div class="route-mini-row">
+                      <div><b>${esc(r.flag ? `${r.flag} ${r.country}` : r.country)}</b><small>${esc(r.title)}</small></div>
+                      <span class="route-status-badge ${esc(r.status || 'unknown')}">${esc(r.status_label || 'Проверяется')}</span>
+                    </div>`).join('')}
+                </div>
+              </div>`).join('')
+          : fallbackRoutes.map((r) => {
+              const devHint = showTabs && r.devices?.length
+                ? r.devices.map((d) => d.name).slice(0, 3).join(', ') + (r.devices.length > 3 ? ` +${r.devices.length - 3}` : '')
+                : `${r.title}${r.filename ? ` · ${r.filename}` : ''}`;
+              return `
+                <div class="route-item">
+                  <div class="route-item-copy">
+                    <strong>${esc(r.flag ? `${r.flag} ${r.country}` : r.country)}</strong>
+                    <small>${esc(devHint)}</small>
+                  </div>
+                  <span class="route-status-badge ${esc(r.status || 'unknown')}">${esc(r.status_label || 'Проверяется')}</span>
+                </div>`;
+            }).join('');
+
+      $('sheet-content').innerHTML = `
+        <h2 id="sheet-title">Ваши маршруты</h2>
+        <p>${showTabs
+          ? `У каждого устройства свой набор из 3 независимых стран — всего у вас ${fallbackRoutes.length}\u00A0${pluralRu(fallbackRoutes.length, 'локация', 'локации', 'локаций')}.`
+          : 'У каждого устройства есть 3 независимых страны. Если в сети просадка — просто переключите тумблер на другую страну в приложении.'}</p>
+        ${showTabs ? `
+          <div class="routes-tabs" role="tablist">
+            <button type="button" role="tab" aria-selected="${activeTab === 'all'}" class="${activeTab === 'all' ? 'active' : ''}" data-routes-tab="all">Все локации (${fallbackRoutes.length})</button>
+            <button type="button" role="tab" aria-selected="${activeTab === 'devices'}" class="${activeTab === 'devices' ? 'active' : ''}" data-routes-tab="devices">По устройствам (${model.byDevice.length})</button>
+          </div>` : ''}
+        <div class="route-list">${listHtml}</div>
+        <div class="sheet-actions">
+          <button type="button" id="routes-trouble">Не работает?</button>
+          <button type="button" class="primary" id="routes-close">Понятно</button>
+        </div>`;
+
+      $('sheet-content').querySelectorAll('[data-routes-tab]').forEach((b) => {
+        b.onclick = () => {
+          activeTab = b.dataset.routesTab;
+          hapticSelect();
+          renderRoutesBody();
+        };
+      });
+      $('routes-trouble').onclick = openTroubleshootSheet;
+      $('routes-close').onclick = closeSheet;
+      if (activeTab === 'devices' && focusSlot > 0) {
+        requestAnimationFrame(() => {
+          $('sheet-content').querySelector(`[data-route-slot="${focusSlot}"]`)?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+        });
+      }
+    };
+
     resetSheetTransform();
-    $('sheet-content').innerHTML = `
-      <h2 id="sheet-title">Ваши маршруты</h2>
-      <p>У каждого устройства есть 3 независимых страны. Если в сети просадка — просто переключите тумблер на другую страну в приложении.</p>
-      <div class="route-list">
-        ${routes.length
-          ? routes.map((r) => `
-            <div class="route-item">
-              <div class="route-item-copy">
-                <strong>${esc(r.flag ? `${r.flag} ${r.country}` : r.country)}</strong>
-                <small>${esc(r.title)}${r.filename ? ` · ${esc(r.filename)}` : ''}</small>
-              </div>
-              <span class="route-status-badge ${esc(r.status || 'unknown')}">${esc(r.status_label || 'Проверяется')}</span>
-            </div>`).join('')
-          : '<div class="empty-history">Маршруты появятся сразу после активации подписки.</div>'}
-      </div>
-      <div class="sheet-actions">
-        <button type="button" id="routes-trouble">Не работает?</button>
-        <button type="button" class="primary" id="routes-close">Понятно</button>
-      </div>`;
-    $('routes-trouble').onclick = openTroubleshootSheet;
-    $('routes-close').onclick = closeSheet;
+    renderRoutesBody();
     showSheetModal($('routes-close'));
   }
 
