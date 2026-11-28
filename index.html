@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" content="#cbb8a4">
   <title>neXus Ray · ЛК</title>
-  <link rel="stylesheet" href="styles.css?v=28">
+  <link rel="stylesheet" href="styles.css?v=29">
   <script src="https://telegram.org/js/telegram-web-app.js?63"></script>
 </head>
 <body>
-  <!-- Spatial Architectural Warm Bokeh Backdrop (visionOS Glassy V2) -->
+  <!-- Spatial Architectural Warm Bokeh Backdrop (No heavy filter blur) -->
   <div class="spatial-canvas" aria-hidden="true">
     <div class="spatial-beam beam-top-left"></div>
     <div class="spatial-beam beam-top-right"></div>
@@ -23,11 +23,9 @@
     <symbol id="i-qr" viewBox="0 0 24 24"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h3v3h-3zM17 17h3v3h-3zM14 20h3"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14"/></symbol>
     <symbol id="i-snow" viewBox="0 0 24 24"><path d="M12 3v18M4.5 7.5l15 9M19.5 7.5l-15 9"/></symbol>
-    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></symbol>
     <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v6c0 5 3.4 8.3 7 9 3.6-.7 7-4 7-9V6l-7-3zm-2.2 9.2 1.7 1.7 3.4-3.5"/></symbol>
     <symbol id="i-phone" viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2.5"/><path d="M11 17h2"/></symbol>
     <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-    <symbol id="i-arrow-up-right" viewBox="0 0 24 24"><path d="M7 17 17 7M9 7h8v8"/></symbol>
     <symbol id="i-home" viewBox="0 0 24 24"><path d="m4 10.5 8-6.5 8 6.5V19a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19v-8.5z"/></symbol>
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.6" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M15.5 5.5 18.5 8.5M5 19l3.8-.8L19 8a2.1 2.1 0 0 0-3-3L5.8 15.2 5 19z"/></symbol>
@@ -37,20 +35,29 @@
     <symbol id="i-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.7 2.2c-.9.5-1.3 1-1.3 2M12 17h.01"/></symbol>
     <symbol id="i-doc" viewBox="0 0 24 24"><path d="M7 3h7l4 4v13a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v4h4M9 12h6M9 16h4"/></symbol>
     <symbol id="i-server" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="6" rx="1.8"/><rect x="4" y="14" width="16" height="6" rx="1.8"/><circle cx="8" cy="7" r="1" fill="currentColor" stroke="none"/><circle cx="8" cy="17" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V4a1 1 0 0 1 1-1h9l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4.5 4.5 0 0 0-5.8 5.8L4 17a1.8 1.8 0 0 0 2.6 2.6l4.9-4.9a4.5 4.5 0 0 0 5.8-5.8l-2.5 2.5-2.6-2.6 2.5-2.5z"/></symbol>
+    <symbol id="i-share" viewBox="0 0 24 24"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7M16 6l-4-4-4 4M12 2v13"/></symbol>
+    <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l4 4-4 4"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><path d="M7 22l-4-4 4-4"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></symbol>
   </svg>
 
   <main id="app" class="shell">
     <section id="loading" class="loading-screen" role="status" aria-live="polite">
       <div class="brand-mark"><span>N</span><b>R</b></div>
       <strong>neXus Ray</strong>
+      <div class="loading-spinner" aria-hidden="true"></div>
       <span>Загружаем личный кабинет…</span>
     </section>
 
     <section id="locked" class="locked" hidden>
       <div class="lock-orbit"><span>N</span><b>R</b></div>
       <p class="eyebrow">neXus Ray</p>
-      <h1>Откройте кабинет из Telegram-бота</h1>
-      <p>Для защиты ключей и подписки приложение проверяет подпись Telegram при каждом входе.</p>
+      <h1 id="locked-title">Откройте кабинет из Telegram-бота</h1>
+      <p id="locked-text">Для защиты ключей и подписки приложение проверяет подпись Telegram при каждом входе.</p>
+      <div id="locked-actions" class="locked-actions" hidden>
+        <button id="locked-retry" type="button" class="locked-btn primary">Повторить</button>
+        <button id="locked-support" type="button" class="locked-btn">Вернуться в бот</button>
+      </div>
     </section>
 
     <section id="content" class="glass-window" hidden>
@@ -61,7 +68,7 @@
           <span class="brand-name">neXus Ray</span>
         </div>
         <div class="topbar-actions">
-          <button id="card-node-btn" class="node-pill" type="button">
+          <button id="card-node-btn" class="node-pill" type="button" aria-label="Статус маршрутов подключения">
             <svg aria-hidden="true"><use href="#i-server"></use></svg>
             <b id="sub-node">Авто</b>
           </button>
@@ -71,7 +78,7 @@
         </div>
       </header>
 
-      <!-- VIEW 1: HOME (Glassy Dashboard V2 Bento Layout) -->
+      <!-- VIEW 1: HOME -->
       <section id="home-view" class="view active">
         <div id="barnum-card" class="barnum-card">
           <div class="barnum-head">
@@ -81,7 +88,7 @@
           <p id="barnum-text" class="barnum-text">Тихий сигнал, быстрый маршрут и ничего лишнего.</p>
         </div>
 
-        <!-- Hero Balance Card (1-to-1 like Total Balance card in Reference Screenshot 1) -->
+        <!-- Hero Subscription Card -->
         <section id="subscription-card" class="subscription-card">
           <div class="sub-head">
             <div class="sub-status-wrap">
@@ -96,7 +103,7 @@
 
           <div class="sub-hero-row">
             <div class="sub-hero">
-              <span class="sub-label">Остаток подписки</span>
+              <span id="subscription-kind" class="sub-label">Остаток подписки</span>
               <div class="days-row">
                 <strong id="sub-days">—</strong>
                 <span id="sub-days-label">дней осталось</span>
@@ -104,17 +111,19 @@
             </div>
           </div>
 
-          <!-- Two Contrasting Capsule Buttons Inside Hero Card (Coal-Black + Pure-White) -->
+          <p id="grace-note" class="grace-note" hidden></p>
+
+          <!-- Test-contract anchor + Quick Connect Buttons (for 1-device / family_member active) -->
           <span id="card-extend-btn" hidden></span>
           <div id="quick-connect-grid" class="quick-grid">
-            <button id="quick-qr" class="quick primary" data-action="qr">
+            <button id="quick-qr" class="quick primary" type="button" data-action="qr">
               <span class="quick-icon" aria-hidden="true"><svg><use href="#i-qr"></use></svg></span>
               <span class="quick-copy">
                 <b id="quick-qr-title">Большой QR</b>
                 <small id="quick-qr-sub">все маршруты</small>
               </span>
             </button>
-            <button id="quick-config" class="quick" data-action="configs">
+            <button id="quick-config" class="quick" type="button" data-action="configs">
               <span class="quick-icon" aria-hidden="true"><svg><use href="#i-download"></use></svg></span>
               <span class="quick-copy">
                 <b id="quick-config-title">Файлы в бот</b>
@@ -124,7 +133,17 @@
           </div>
         </section>
 
-        <!-- Wide Standout Payment CTA Button (Between Time Tile and Device Traffic Chart) -->
+        <!-- Free 24h Trial Banner (for eligible new users only) -->
+        <button id="trial-cta" class="trial-wide" type="button" data-action="trial" hidden>
+          <span class="trial-wide-icon" aria-hidden="true"><svg><use href="#i-gift"></use></svg></span>
+          <span class="trial-wide-copy">
+            <strong>Попробовать 24 часа бесплатно</strong>
+            <small>Мгновенная выдача ключей · без привязки карты</small>
+          </span>
+          <span class="trial-wide-arrow" aria-hidden="true">→</span>
+        </button>
+
+        <!-- Wide Standout Payment CTA Button -->
         <button id="purchase-cta" class="purchase-wide" type="button" data-go="plans">
           <span class="purchase-wide-icon" aria-hidden="true"><svg><use href="#i-plus"></use></svg></span>
           <span class="purchase-wide-copy">
@@ -137,9 +156,20 @@
           </span>
         </button>
 
-        <div id="home-promo" class="home-promo" hidden></div>
+        <!-- Active Sale / Personal Discount Strip on Home -->
+        <button id="home-promo" class="home-promo" type="button" data-go="plans" hidden></button>
 
-        <!-- Multi-Device Spline Area Traffic Chart (Under Time Tile & Wide Payment Button) -->
+        <!-- Onboarding Card (shown for new/none users instead of an empty 0 GB chart) -->
+        <section id="onboarding-card" class="onboarding-card" hidden>
+          <h2>Доступ за 1 минуту</h2>
+          <div class="onboarding-points">
+            <div class="onboarding-point"><b>3</b><div><strong>Три независимых маршрута</strong><span>Основной, резервный и доп. маршрут в одном архиве</span></div></div>
+            <div class="onboarding-point"><b>7</b><div><strong>Личный и семейный доступ</strong><span>Тарифы на 1, 3 или 7 устройств — каждый со своим ключом</span></div></div>
+            <div class="onboarding-point"><b>QR</b><div><strong>Удобная настройка</strong><span>EX WG 1.0 или AmneziaWG — импорт по QR или одним файлом</span></div></div>
+          </div>
+        </section>
+
+        <!-- Multi-Device Spline Area Traffic Chart -->
         <section id="traffic-card" class="traffic-card" aria-label="График трафика устройств">
           <div class="traffic-head">
             <div class="traffic-head-left">
@@ -147,7 +177,7 @@
               <p id="traffic-sub">За 7 дней · коснитесь графика для деталей</p>
             </div>
             <div class="traffic-head-pills">
-              <button id="bento-devices-tile" class="traffic-devices-pill" type="button" data-go="devices" aria-label="Открыть устройства">
+              <button id="bento-devices-tile" class="traffic-devices-pill" type="button" data-go="devices">
                 <svg aria-hidden="true"><use href="#i-phone"></use></svg>
                 <b id="sub-devices">—</b>
               </button>
@@ -158,9 +188,9 @@
           <div id="traffic-chart-box" class="traffic-chart-box"></div>
         </section>
 
-        <!-- 3-Column Mini-Wallet Bento Strip (like USD / EUR / GBP cards in Screenshot 1) -->
+        <!-- Adaptive Mini-Wallet Bento Strip (auto-fit: zero empty hole on 2 or 3 visible items) -->
         <div id="home-actions" class="mini-wallets">
-          <button class="mini-wallet" type="button" data-action="guide">
+          <button id="guide-action" class="mini-wallet" type="button" data-action="guide">
             <div class="mini-wallet-top">
               <span class="mini-wallet-icon" aria-hidden="true"><svg><use href="#i-help"></use></svg></span>
               <em class="mini-badge emerald">1 мин</em>
@@ -169,7 +199,7 @@
             <small>EX WG / AWG</small>
           </button>
 
-          <button class="mini-wallet" type="button" data-action="regenerate">
+          <button id="regen-action" class="mini-wallet" type="button" data-action="regenerate">
             <div class="mini-wallet-top">
               <span class="mini-wallet-icon" aria-hidden="true"><svg><use href="#i-refresh"></use></svg></span>
               <em class="mini-badge teal">QR</em>
@@ -178,13 +208,31 @@
             <small>Перевыпуск</small>
           </button>
 
+          <button id="promo-wallet-action" class="mini-wallet" type="button" data-action="promo" hidden>
+            <div class="mini-wallet-top">
+              <span class="mini-wallet-icon" aria-hidden="true"><svg><use href="#i-tag"></use></svg></span>
+              <em class="mini-badge teal">Код</em>
+            </div>
+            <b>Промокод</b>
+            <small>Бонус / скидка</small>
+          </button>
+
+          <button id="troubleshoot-wallet-action" class="mini-wallet" type="button" data-action="troubleshoot" hidden>
+            <div class="mini-wallet-top">
+              <span class="mini-wallet-icon" aria-hidden="true"><svg><use href="#i-wrench"></use></svg></span>
+              <em class="mini-badge amber">Помощь</em>
+            </div>
+            <b>Не работает?</b>
+            <small>Диагностика</small>
+          </button>
+
           <button id="freeze-action" class="mini-wallet" type="button" data-action="freeze">
             <div class="mini-wallet-top">
               <span class="mini-wallet-icon" aria-hidden="true"><svg><use href="#i-snow"></use></svg></span>
               <em id="freeze-sub" class="mini-badge amber">30 дн.</em>
             </div>
             <b id="freeze-title">Заморозка</b>
-            <small>Пауза дней</small>
+            <small id="freeze-hint">Пауза дней</small>
           </button>
         </div>
       </section>
@@ -194,23 +242,25 @@
         <div class="view-head">
           <div>
             <h1>Устройства</h1>
-            <p id="devices-summary">Загрузка слотов…</p>
+            <p id="devices-summary">Загрузка мест…</p>
           </div>
           <span id="devices-pill" class="count-pill">0 / 0</span>
         </div>
 
         <div class="progress-track"><div id="devices-progress"></div></div>
+        <div id="devices-status-banner" class="devices-status-banner" hidden></div>
         <div id="devices-list" class="stack"></div>
-
-        <button id="add-device" class="add-device" hidden>+ Добавить устройство</button>
 
         <div id="device-guide-card" class="info-card">
           <span aria-hidden="true">i</span>
-          <p>Для максимальной стабильности импортируйте оба конфига — <b>Основной</b> и <b>Резерв (RS)</b>, но включайте только один тумблер одновременно.</p>
+          <div class="info-card-body">
+            <p>Для максимальной стабильности добавьте все <b>3 маршрута</b> (основной, резерв и доп. маршрут), но включайте только один тумблер одновременно.</p>
+            <div class="info-card-links">
+              <button type="button" class="text-chip-btn" data-action="routes">Статус маршрутов</button>
+              <button type="button" class="text-chip-btn" data-action="troubleshoot">Не работает?</button>
+            </div>
+          </div>
         </div>
-
-        <div id="family-note" class="device-note" hidden></div>
-        <button id="family-leave" class="family-danger" hidden>Покинуть семейный доступ</button>
       </section>
 
       <!-- VIEW 3: PLANS -->
@@ -224,9 +274,9 @@
 
         <div id="device-limit-selector" class="segmented" role="group" aria-label="Лимит устройств">
           <div id="seg-pill" class="seg-pill" aria-hidden="true"></div>
-          <button data-limit="1" data-idx="0">1 устр.</button>
-          <button data-limit="3" data-idx="1">3 устр.</button>
-          <button data-limit="7" data-idx="2">7 устр.</button>
+          <button type="button" data-limit="1" data-idx="0">1 устр.</button>
+          <button type="button" data-limit="3" data-idx="1">3 устр.</button>
+          <button type="button" data-limit="7" data-idx="2">7 устр.</button>
         </div>
 
         <div id="promo-banner" class="promo-banner" hidden></div>
@@ -245,12 +295,18 @@
 
         <div id="plans-list" class="plan-list"></div>
 
+        <!-- Compact Promocode Entry -->
+        <div id="plans-promo-box" class="promo-input-card">
+          <input id="promo-code-input" type="text" maxlength="32" autocomplete="off" autocapitalize="characters" placeholder="Есть промокод? Введите код">
+          <button id="promo-apply-btn" type="button">Применить</button>
+        </div>
+
         <p class="legal">
           Оплачивая подписку, вы соглашаетесь с <a id="inline-offer-link" href="https://telegra.ph/Publichnaya-oferta-Polzovatelskoe-soglashenie-02-22" target="_blank" rel="noopener">публичной офертой</a>.
         </p>
       </section>
 
-      <!-- VIEW 4: MORE -->
+      <!-- VIEW 4: MORE / PROFILE -->
       <section id="more-view" class="view">
         <div class="view-head">
           <div>
@@ -260,21 +316,54 @@
         </div>
 
         <div class="metrics-grid">
-          <article>
+          <button id="metric-freeze-btn" type="button" class="metric-card">
             <span id="metric-one-icon" class="metric-badge emerald" aria-hidden="true"><svg><use href="#i-snow"></use></svg></span>
             <small id="metric-one-label">Заморозка</small>
             <b id="freeze-bank">—</b>
-          </article>
-          <article>
+          </button>
+          <button id="metric-referral-btn" type="button" class="metric-card">
             <span class="metric-badge teal" aria-hidden="true"><svg><use href="#i-gift"></use></svg></span>
             <small>Приглашено</small>
             <b id="referral-count">—</b>
-          </article>
-          <article>
+          </button>
+          <button id="metric-family-btn" type="button" class="metric-card">
             <span class="metric-badge amber" aria-hidden="true"><svg><use href="#i-family"></use></svg></span>
-            <small>Семья</small>
+            <small id="metric-three-label">Семья</small>
             <b id="family-count">—</b>
-          </article>
+          </button>
+        </div>
+
+        <!-- Profile Quick Settings & Perks -->
+        <div class="section-head">
+          <h2>Управление и бонусы</h2>
+        </div>
+        <div class="action-list">
+          <div id="autorenew-row" class="toggle-row" hidden>
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-repeat"></use></svg></span>
+            <div class="toggle-copy">
+              <b>Автопродление</b>
+              <small id="autorenew-sub">Привязывается при оплате</small>
+            </div>
+            <button id="autorenew-toggle" class="ios-switch" type="button" role="switch" aria-checked="false" aria-label="Переключить автопродление">
+              <span></span>
+            </button>
+          </div>
+          <button id="profile-referral-btn" type="button">
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-share"></use></svg></span>
+            <div>
+              <b>Пригласить друга (+7 дней)</b>
+              <small id="profile-referral-sub">Подарите другу 24 ч доступа</small>
+            </div>
+            <em aria-hidden="true">›</em>
+          </button>
+          <button id="profile-promo-btn" type="button" data-action="promo">
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-tag"></use></svg></span>
+            <div>
+              <b>Ввести промокод</b>
+              <small>Дни к подписке или скидка</small>
+            </div>
+            <em aria-hidden="true">›</em>
+          </button>
         </div>
 
         <div class="section-head">
@@ -283,10 +372,26 @@
         <div id="payment-history" class="history-list"></div>
 
         <div class="section-head">
-          <h2>Поддержка и документы</h2>
+          <h2>Помощь и документы</h2>
         </div>
         <div class="action-list">
-          <button id="support-link">
+          <button id="profile-routes-btn" type="button" data-action="routes">
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-server"></use></svg></span>
+            <div>
+              <b>Статус маршрутов</b>
+              <small>Доступность ваших 3 стран</small>
+            </div>
+            <em aria-hidden="true">›</em>
+          </button>
+          <button id="profile-troubleshoot-btn" type="button" data-action="troubleshoot">
+            <span class="action-icon" aria-hidden="true"><svg><use href="#i-wrench"></use></svg></span>
+            <div>
+              <b>Не работает подключение?</b>
+              <small>Быстрая проверка за 15 секунд</small>
+            </div>
+            <em aria-hidden="true">›</em>
+          </button>
+          <button id="support-link" type="button">
             <span class="action-icon" aria-hidden="true"><svg><use href="#i-help"></use></svg></span>
             <div>
               <b>Написать в поддержку</b>
@@ -294,7 +399,7 @@
             </div>
             <em aria-hidden="true">›</em>
           </button>
-          <button id="offer-link">
+          <button id="offer-link" type="button">
             <span class="action-icon" aria-hidden="true"><svg><use href="#i-doc"></use></svg></span>
             <div>
               <b>Публичная оферта</b>
@@ -303,18 +408,18 @@
             <em aria-hidden="true">›</em>
           </button>
         </div>
-        <p class="build">neXus Ray · Glassy Dashboard V2</p>
+        <p class="build">neXus Ray</p>
       </section>
     </section>
   </main>
 
-  <!-- Floating visionOS Glass Pill Dock (1-to-1 like Reference Screenshot 1 & 2) -->
+  <!-- Floating visionOS Glass Pill Dock -->
   <nav id="nav" class="bottom-nav" aria-label="Основная навигация" hidden>
     <div id="nav-pill" class="nav-pill" aria-hidden="true"></div>
-    <button class="active" aria-current="page" data-view="home" data-nav-idx="0"><span aria-hidden="true"><svg><use href="#i-home"></use></svg></span><b>Главная</b></button>
-    <button data-view="devices" data-nav-idx="1"><span aria-hidden="true"><svg><use href="#i-phone"></use></svg></span><b>Устройства</b></button>
-    <button data-view="more" data-nav-idx="2"><span aria-hidden="true"><svg><use href="#i-more"></use></svg></span><b>Профиль</b></button>
-    <button class="buy-nav" data-view="plans" data-nav-idx="3" aria-label="Купить подписку"><span class="dock-plus-circle" aria-hidden="true"><svg><use href="#i-plus"></use></svg></span><b>Купить</b></button>
+    <button type="button" class="active" aria-current="page" data-view="home" data-nav-idx="0"><span aria-hidden="true"><svg><use href="#i-home"></use></svg></span><b>Главная</b></button>
+    <button type="button" data-view="devices" data-nav-idx="1"><span aria-hidden="true"><svg><use href="#i-phone"></use></svg></span><b>Устройства</b></button>
+    <button type="button" data-view="more" data-nav-idx="2"><span aria-hidden="true"><svg><use href="#i-more"></use></svg></span><b>Профиль</b></button>
+    <button type="button" class="buy-nav" data-view="plans" data-nav-idx="3" aria-label="Купить подписку"><span class="dock-plus-circle" aria-hidden="true"><svg><use href="#i-plus"></use></svg></span><b>Купить</b></button>
   </nav>
 
   <div id="backdrop" class="backdrop"></div>
@@ -322,7 +427,7 @@
     <div id="sheet-drag-zone" class="sheet-drag-zone">
       <div class="sheet-handle"></div>
     </div>
-    <button id="sheet-close" class="sheet-close" aria-label="Закрыть окно">×</button>
+    <button id="sheet-close" class="sheet-close" type="button" aria-label="Закрыть окно">×</button>
     <div id="sheet-content"></div>
   </aside>
 
@@ -331,6 +436,6 @@
     <b id="activity-text">Выполняем…</b>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script src="app.js?v=28"></script></script>
+  <script src="app.js?v=29"></script>
 </body>
 </html>

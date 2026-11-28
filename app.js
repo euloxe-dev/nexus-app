@@ -5,6 +5,11 @@
   let selectedDevices = 0;
   let pendingPayment = null;
   let busy = false;
+  let loadingInFlight = false;
+  let checkingPayment = false;
+  let confirmedPollTimer = null;
+  let lastAccessMode = null;
+  let chartResizeTimer = null;
   const $ = (id) => document.getElementById(id);
   const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
   const icon = (name) => `<svg aria-hidden="true"><use href="#i-${name}"></use></svg>`;
@@ -14,10 +19,11 @@
     tg.expand();
     tg.setHeaderColor?.('#cbb8a4');
     tg.setBackgroundColor?.('#cbb8a4');
+    tg.setBottomBarColor?.('#cbb8a4');
     if (tg.isVersionAtLeast?.('7.7')) tg.disableVerticalSwipes?.();
   }
 
-  const haptic = (kind='light') => tg?.HapticFeedback?.impactOccurred?.(kind);
+  const haptic = (kind = 'light') => tg?.HapticFeedback?.impactOccurred?.(kind);
   const hapticSelect = () => tg?.HapticFeedback?.selectionChanged?.();
   const notify = (message) => {
     const el = $('toast');
@@ -25,12 +31,29 @@
     el.textContent = message;
     el.classList.add('show');
     clearTimeout(notify.timer);
-    notify.timer = setTimeout(() => el.classList.remove('show'), 2600);
+    notify.timer = setTimeout(() => el.classList.remove('show'), 2800);
   };
-  const fmtDate = (seconds) => seconds ? new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'short',year:'numeric'}).format(new Date(seconds*1000)).replace(/\s*г\.?$/i,'') : '—';
-  const statusText = {active:'Активна',frozen:'Заморожена',expired:'Истекла',inactive:'Отключена',none:'Нет подписки'};
+
+  const fmtDate = (seconds) => seconds ? new Intl.DateTimeFormat('ru-RU', {day:'2-digit',month:'short',year:'numeric'}).format(new Date(seconds * 1000)).replace(/\s*г\.?$/i, '') : '—';
+  const fmtDateTime = (seconds) => seconds ? new Intl.DateTimeFormat('ru-RU', {day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(seconds * 1000)) : '';
+  const openExternal = (url) => { if (tg?.openLink) tg.openLink(url); else window.open(url, '_blank'); };
+  const openTgUrl = (url) => { if (tg?.openTelegramLink) tg.openTelegramLink(url); else window.open(url, '_blank'); };
+
+  const statusText = {active:'Активна',frozen:'Заморожена',expired:'Истекла',deleted:'Истекла',inactive:'Отключена',none:'Нет подписки'};
   const paymentText = {pending:'Ожидает оплаты',confirmed:'Подтверждён',processing:'Выдаём доступ',applied:'Оплачен',canceled:'Отменён',failed:'Нужна проверка',manual_review:'Ручная проверка'};
-  const monthWord = (n) => n===1?'1 месяц':n<5?`${n} месяца`:`${n} месяцев`;
+
+  const pluralRu = (n, one, few, many) => {
+    const abs = Math.abs(Number(n) || 0), m100 = abs % 100, m10 = abs % 10;
+    if (m100 >= 11 && m100 <= 14) return many;
+    if (m10 === 1) return one;
+    if (m10 >= 2 && m10 <= 4) return few;
+    return many;
+  };
+  const monthWord = (n) => `${n}\u00A0${pluralRu(n, 'месяц', 'месяца', 'месяцев')}`;
+  const deviceWord = (n) => `${n}\u00A0${pluralRu(n, 'устройство', 'устройства', 'устройств')}`;
+  const deviceGenWord = (n) => `${n}\u00A0${pluralRu(n, 'устройства', 'устройств', 'устройств')}`;
+  const slotWord = (n) => `${n}\u00A0${pluralRu(n, 'место', 'места', 'мест')}`;
+  const hourWord = (n) => `${n}\u00A0${pluralRu(n, 'час', 'часа', 'часов')}`;
   const daysRemainingLabel = (n) => {
     const abs = Math.abs(Number(n) || 0), m100 = abs % 100, m10 = abs % 10;
     if (m100 >= 11 && m100 <= 14) return 'дней осталось';
@@ -40,6 +63,43 @@
   };
   const nbsp = (s) => String(s ?? '').replace(/(^|[\s«(])([вкосуиаВКОСУИА])\s+/g, '$1$2\u00A0');
   const operationId = () => crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const copyText = async (text, okMsg = 'Скопировано') => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        haptic('light');
+        notify(okMsg);
+        return true;
+      }
+    } catch (_) {}
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+      haptic('light');
+      notify(okMsg);
+      return true;
+    } catch (_) {
+      notify('Не удалось скопировать');
+      return false;
+    }
+  };
+
+  const detectOs = () => {
+    const p = String(tg?.platform || '').toLowerCase();
+    const ua = String(navigator.userAgent || '').toLowerCase();
+    if (p === 'ios' || /iphone|ipad|ipod/.test(ua)) return 'ios';
+    if (p === 'android' || /android/.test(ua)) return 'android';
+    if (p === 'macos' || /macintosh|mac os x/.test(ua)) return 'macos';
+    if (p === 'tdesktop' && /windows/.test(ua)) return 'windows';
+    if (/windows/.test(ua)) return 'windows';
+    return 'ios';
+  };
 
   const hashSeed = (id, bucket, salt = 0) => {
     let seed = (Number(id) || 1) ^ Math.imul(bucket + salt, 2654435761);
@@ -99,7 +159,7 @@
     'Идея, которую вы отложили «на потом», снова актуальна — сейчас у вас уже достаточно опыта, чтобы реализовать её легко.',
     'Даже если день начался не совсем по расписанию, не торопитесь: эта небольшая пауза убережёт вас от лишней суеты.',
     'Вы тонко чувствуете фальшь и цените прямоту — сегодня именно ваша искренность поможет быстро договориться о важном.',
-    'Порой вам проще сделать всё самому, чем объяснять другим, но сегодня делегирование одной мелочи освободит вечер для отдыха.',
+    'Порой вам проще сделать всё самостоятельно, чем объяснять другим, но сегодня делегирование одной мелочи освободит вечер для отдыха.',
     'То, что казалось задержкой или препятствием пару дней назад, сегодня раскроется как удачное стечение обстоятельств.',
     'Вы редко хвалите себя за промежуточные итоги, хотя за спиной уже огромный путь. Оглянитесь — вам правда есть чем гордиться.',
     'Сегодня случайная фраза в разговоре или переписке даст неожиданный ключ к вопросу, который давно крутился в голове.',
@@ -167,38 +227,122 @@
       text: nbsp(DAILY_PREDICTIONS[predIdx]),
     };
   };
+
   const nodeLabel = (nodeCode, inactive) => {
     const code = String(nodeCode || '').toLowerCase();
-    if (code.startsWith('s6') || code.startsWith('s4')) return 'Main · Бельгия 🇧🇪';
-    if (code.startsWith('s3')) return 'Main · Вена 🇦🇹';
-    if (code.startsWith('s5') || code.startsWith('s2')) return 'Reserve · Испания 🇪🇸';
-    if (code.startsWith('s1')) return 'Reserve · Нидерланды 🇳🇱';
-    if (code.startsWith('d1')) return 'Edge · Цюрих 🇨🇭';
-    if (code.startsWith('d2')) return 'Edge · Швеция 🇸🇪';
+    if (code.startsWith('s6') || code.startsWith('s4')) return 'Бельгия 🇧🇪';
+    if (code.startsWith('s3')) return 'Австрия 🇦🇹';
+    if (code.startsWith('s5') || code.startsWith('s2')) return 'Испания 🇪🇸';
+    if (code.startsWith('s1')) return 'Нидерланды 🇳🇱';
+    if (code.startsWith('d1')) return 'Швейцария 🇨🇭';
+    if (code.startsWith('d2')) return 'Швеция 🇸🇪';
     if (code) return code.toUpperCase();
-    return inactive ? 'Ожидает' : '—';
+    return inactive ? 'Не активна' : 'Авто';
   };
 
   const API_BASES = window.location.hostname.endsWith('github.io')
     ? ['https://nexusray.cc/nexus/api/']
     : ['/nexus/api/'];
 
-  async function api(path, options={}) {
-    const headers = {'X-Telegram-Init-Data':initData, ...(options.body?{'Content-Type':'application/json'}:{}), ...(options.headers||{})};
+  async function api(path, options = {}) {
+    const headers = {
+      'X-Telegram-Init-Data': initData,
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(options.headers || {}),
+    };
+    const timeoutMs = options.timeoutMs || 14000;
     let lastError = null;
     for (const base of API_BASES) {
+      const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
       try {
-        const response = await fetch(`${base}${path}`, {...options, headers});
-        let data={}; try { data=await response.json(); } catch (_) {}
-        if (!response.ok) throw new Error(data.message || data.error || 'Сервис временно недоступен');
+        const response = await fetch(`${base}${path}`, {
+          ...options,
+          headers,
+          signal: controller?.signal,
+        });
+        let data = {};
+        try { data = await response.json(); } catch (_) {}
+        if (!response.ok) {
+          const err = new Error(data.message || data.error || 'Сервис временно недоступен');
+          err.status = response.status;
+          err.code = data.error || '';
+          throw err;
+        }
         return data;
       } catch (err) {
-        lastError = err;
-        if (err instanceof TypeError && API_BASES.length > 1) continue;
-        throw err;
+        if (err?.name === 'AbortError') {
+          const tErr = new Error('Сервер отвечает слишком долго. Попробуйте ещё раз.');
+          tErr.status = 0;
+          tErr.code = 'timeout';
+          lastError = tErr;
+        } else {
+          lastError = err;
+        }
+        if ((err instanceof TypeError || err?.name === 'AbortError') && API_BASES.length > 1) continue;
+        throw lastError;
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
     throw lastError || new Error('Сервис временно недоступен');
+  }
+
+  const sentEvents = new Set();
+  function sendEvent(name, oncePerSession = false) {
+    if (!initData || !name) return;
+    if (oncePerSession && sentEvents.has(name)) return;
+    sentEvents.add(name);
+    api('event', { method: 'POST', body: JSON.stringify({ event: name }), timeoutMs: 5000 }).catch(() => {});
+  }
+
+  function pendingStorageKey() {
+    return `nexus_pending_pay:${state?.viewer?.id || 0}`;
+  }
+  function savePendingPayment(pay) {
+    pendingPayment = pay || null;
+    try {
+      if (pay) localStorage.setItem(pendingStorageKey(), JSON.stringify({ ...pay, saved_at: Date.now() }));
+      else localStorage.removeItem(pendingStorageKey());
+    } catch (_) {}
+    renderPendingBanner();
+  }
+  function restorePendingPayment() {
+    if (!state) return;
+    const histPending = (state.payment_history || []).find((p) => p.status === 'pending' && p.payment_id);
+    if (histPending) {
+      pendingPayment = {
+        payment_id: histPending.payment_id,
+        amount: histPending.amount,
+        confirmation_url: histPending.confirmation_url || pendingPayment?.confirmation_url || '',
+      };
+      renderPendingBanner();
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(pendingStorageKey());
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved && saved.payment_id && Date.now() - (saved.saved_at || 0) < 30 * 60 * 1000) {
+        pendingPayment = saved;
+      } else {
+        localStorage.removeItem(pendingStorageKey());
+        pendingPayment = null;
+      }
+    } catch (_) {
+      pendingPayment = null;
+    }
+    renderPendingBanner();
+  }
+  function renderPendingBanner() {
+    const box = $('pending-payment');
+    if (!box) return;
+    if (!pendingPayment) {
+      box.hidden = true;
+      return;
+    }
+    box.hidden = false;
+    if ($('pending-amount')) $('pending-amount').textContent = `${pendingPayment.amount}\u00A0₽`;
+    if ($('open-payment')) $('open-payment').hidden = !pendingPayment.confirmation_url;
   }
 
   const VIEW_INDEX = { home: 0, devices: 1, more: 2, plans: 3 };
@@ -216,6 +360,11 @@
     }
     window.scrollTo({ top: 0, behavior: 'instant' });
     hapticSelect();
+    if (view === 'home' && state) {
+      requestAnimationFrame(() => renderTrafficChart());
+    } else if (view === 'plans' || view === 'devices') {
+      sendEvent(`view:${view}`, true);
+    }
   }
 
   let lastFocused = null;
@@ -241,16 +390,26 @@
     }
     if (backdrop) backdrop.classList.add('open');
     if (focusTarget && focusTarget.tagName === 'INPUT') {
+      setTimeout(() => {
+        if (!sheet?.classList.contains('open')) return;
+        focusTarget.focus();
+        if (typeof focusTarget.select === 'function') focusTarget.select();
+        focusTarget.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+      }, 280);
+    } else if (focusTarget && typeof focusTarget.focus === 'function') {
       focusTarget.focus({ preventScroll: true });
-      if (typeof focusTarget.select === 'function') focusTarget.select();
     } else {
       sheet?.focus?.({ preventScroll: true });
     }
   }
 
-  function openSheet(title, text, actions, field=false, initialValue='') {
+  function openSheet(title, text, actions, field = false, initialValue = '', fieldLabel = 'Название устройства', fieldPlaceholder = 'Мой iPhone') {
     resetSheetTransform();
-    $('sheet-content').innerHTML = `<h2 id="sheet-title">${esc(title)}</h2><p>${esc(nbsp(text))}</p>${field?'<label class="field"><span>Название устройства</span><input id="sheet-input" maxlength="30" autocomplete="off" autocorrect="off" enterkeyhint="done" placeholder="Мой iPhone"></label>':''}<div class="sheet-actions">${actions.map((a)=>`<button type="button" class="${a.class||''}" data-sheet-action="${esc(a.id)}">${esc(a.label)}</button>`).join('')}</div>`;
+    $('sheet-content').innerHTML = `
+      <h2 id="sheet-title">${esc(title)}</h2>
+      <p>${esc(nbsp(text))}</p>
+      ${field ? `<label class="field"><span>${esc(fieldLabel)}</span><input id="sheet-input" maxlength="32" autocomplete="off" autocorrect="off" enterkeyhint="done" placeholder="${esc(fieldPlaceholder)}"><div id="sheet-inline-error" class="sheet-inline-error" hidden></div></label>` : ''}
+      <div class="sheet-actions">${actions.map((a) => `<button type="button" class="${a.class || ''}" data-sheet-action="${esc(a.id)}">${esc(a.label)}</button>`).join('')}</div>`;
     actions.forEach((action) => {
       const btn = $('sheet-content').querySelector(`[data-sheet-action="${action.id}"]`);
       if (btn) btn.onclick = () => action.run(field ? $('sheet-input').value : '');
@@ -258,11 +417,14 @@
     const input = field ? $('sheet-input') : null;
     if (input) {
       input.value = initialValue || '';
+      input.addEventListener('input', () => {
+        const errEl = $('sheet-inline-error');
+        if (errEl) errEl.hidden = true;
+      });
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') {
           e.preventDefault();
-          const primaryBtn = $('sheet-content').querySelector('.sheet-actions button.primary');
-          primaryBtn?.click();
+          $('sheet-content').querySelector('.sheet-actions button.primary')?.click();
         }
       });
     }
@@ -271,6 +433,7 @@
 
   function closeSheet() {
     resetSheetTransform();
+    document.documentElement.style.setProperty('--kb-offset', '0px');
     $('backdrop')?.classList.remove('open');
     const sheet = $('sheet');
     if (sheet) {
@@ -285,26 +448,28 @@
     lastFocused = null;
   }
 
+  function initVisualViewport() {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const syncKb = () => {
+      const offset = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+      document.documentElement.style.setProperty('--kb-offset', `${offset > 60 ? offset : 0}px`);
+    };
+    vv.addEventListener('resize', syncKb);
+    vv.addEventListener('scroll', syncKb);
+  }
+
   function initSheetDrag() {
     const zone = $('sheet-drag-zone');
     const sheet = $('sheet');
     const backdrop = $('backdrop');
     if (!zone || !sheet) return;
-    let startY = 0;
-    let lastY = 0;
-    let lastTime = 0;
-    let instantVy = 0;
-    let currentDy = 0;
-    let dragging = false;
+    let startY = 0, lastY = 0, lastTime = 0, instantVy = 0, currentDy = 0, dragging = false;
 
     const onStart = (clientY) => {
       if (!sheet.classList.contains('open')) return;
-      startY = clientY;
-      lastY = clientY;
-      lastTime = performance.now();
-      instantVy = 0;
-      currentDy = 0;
-      dragging = true;
+      startY = clientY; lastY = clientY; lastTime = performance.now();
+      instantVy = 0; currentDy = 0; dragging = true;
       sheet.classList.add('is-dragging');
     };
     const onMove = (clientY) => {
@@ -312,8 +477,7 @@
       const now = performance.now();
       const dt = Math.max(1, now - lastTime);
       instantVy = (clientY - lastY) / dt;
-      lastY = clientY;
-      lastTime = now;
+      lastY = clientY; lastTime = now;
       const rawDy = clientY - startY;
       currentDy = rawDy < 0 ? rawDy * 0.18 : rawDy;
       sheet.style.transform = `translate3d(-50%, ${currentDy}px, 0)`;
@@ -336,32 +500,29 @@
       }
     };
 
-    zone.addEventListener('touchstart', (e) => {
-      if (e.touches.length === 1) onStart(e.touches[0].clientY);
-    }, { passive: true });
-    zone.addEventListener('touchmove', (e) => {
-      if (dragging && e.touches.length === 1) onMove(e.touches[0].clientY);
-    }, { passive: true });
+    zone.addEventListener('touchstart', (e) => { if (e.touches.length === 1) onStart(e.touches[0].clientY); }, { passive: true });
+    zone.addEventListener('touchmove', (e) => { if (dragging && e.touches.length === 1) onMove(e.touches[0].clientY); }, { passive: true });
     zone.addEventListener('touchend', onEnd);
     zone.addEventListener('touchcancel', onEnd);
   }
 
-  async function runAction(path, body, options={}) {
-    const {refresh=true, progress='Выполняем…', notifySuccess=true}=options;
+  async function runAction(path, body, options = {}) {
+    const { refresh = true, progress = 'Выполняем…', notifySuccess = true, keepSheetOpen = false } = options;
     if (busy) return null;
     busy = true;
-    closeSheet();
+    if (!keepSheetOpen) closeSheet();
     $('activity-text').textContent = progress;
     $('activity').hidden = false;
     tg?.MainButton?.showProgress?.();
     try {
-      const result = await api(path, {method:'POST', body:JSON.stringify(body||{})});
+      const result = await api(path, { method: 'POST', body: JSON.stringify(body || {}) });
+      if (keepSheetOpen) closeSheet();
       if (notifySuccess) notify(result.message || 'Готово');
       tg?.HapticFeedback?.notificationOccurred?.('success');
       if (refresh) await load();
       return result;
     } catch (error) {
-      notify(error.message);
+      notify(error.message || 'Не удалось выполнить действие');
       tg?.HapticFeedback?.notificationOccurred?.('error');
       return null;
     } finally {
@@ -373,18 +534,52 @@
 
   function showDeliveryResult(message) {
     openSheet('Готово — проверьте чат', `${message} Чтобы сразу увидеть новые сообщения, закройте Mini App.`, [
-      {id:'stay', label:'Остаться', run:closeSheet},
-      {id:'chat', label:'Открыть чат', class:'primary', run:()=>tg?.close?.()},
+      { id: 'stay', label: 'Остаться', run: closeSheet },
+      { id: 'chat', label: 'Открыть чат', class: 'primary', run: () => tg?.close?.() },
     ]);
   }
 
-  const fmtDateTime = (seconds) => seconds ? new Intl.DateTimeFormat('ru-RU',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'}).format(new Date(seconds*1000)) : '';
-  const openExternal = (url) => { if (tg?.openLink) tg.openLink(url); else window.open(url, '_blank'); };
+  function isTrialSubscription(sub) {
+    if (typeof sub.is_trial === 'boolean') return sub.is_trial;
+    const remSec = Math.max(0, (sub.expires_at || 0) - Date.now() / 1000);
+    return sub.status === 'active' && (sub.device_limit || 1) === 1 && remSec > 0 && remSec <= 86400 && !(state?.payment_history || []).some((p) => p.status === 'applied');
+  }
+
+  function fmtFreezeBank(sub) {
+    const hrs = Number.isFinite(sub.freeze_bank_hours) ? Math.max(0, Math.floor(sub.freeze_bank_hours)) : Math.max(0, (sub.freeze_bank_days || 0) * 24);
+    const d = Math.floor(hrs / 24);
+    const h = hrs % 24;
+    if (hrs <= 0) return '0\u00A0дн.';
+    if (d === 0) return `${h}\u00A0ч`;
+    return h > 0 && d < 3 ? `${d}\u00A0дн. ${h}\u00A0ч` : `${d}\u00A0дн.`;
+  }
+
+  function fmtLastOnline(device, subStatus) {
+    if (subStatus === 'frozen') return { text: 'На паузе', cls: 'paused', dot: 'waiting' };
+    if (subStatus !== 'active') return { text: 'Отключён', cls: '', dot: 'offline' };
+    if (device.online) return { text: 'Онлайн', cls: 'online', dot: '' };
+    const ts = Number(device.last_online_at || 0);
+    if (!ts) return { text: 'Готов к работе', cls: '', dot: '' };
+    const diffMin = Math.max(1, Math.floor((Date.now() / 1000 - ts) / 60));
+    if (diffMin < 60) return { text: `Был ${diffMin}\u00A0мин назад`, cls: '', dot: '' };
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return { text: `Был ${hourWord(diffH)} назад`, cls: '', dot: 'offline' };
+    const diffD = Math.floor(diffH / 24);
+    return { text: `Был ${diffD}\u00A0дн. назад`, cls: '', dot: 'offline' };
+  }
 
   function renderHome() {
-    const sub = state.subscription, viewer = state.viewer, familyMember = state.access_mode === 'family_member';
+    const sub = state.subscription || {};
+    const viewer = state.viewer || {};
+    const familyMember = state.access_mode === 'family_member';
     const inactive = state.cabinet_mode === 'inactive';
-    const sale = state.promotions?.global_sale, pers = state.promotions?.personal_discount;
+    const isActive = sub.status === 'active';
+    const isFrozen = sub.status === 'frozen';
+    const isExpired = sub.status === 'expired';
+    const isNone = sub.status === 'none' || sub.status === 'deleted' || sub.status === 'inactive';
+    const isTrial = !familyMember && isTrialSubscription(sub);
+    const sale = state.promotions?.global_sale;
+    const pers = state.promotions?.personal_discount;
     const hasSale = Boolean(sale?.active && sale.percent > 0);
     const hasPers = Boolean(pers?.active && pers.value > 0);
     document.body.dataset.cabinetMode = state.cabinet_mode || 'inactive';
@@ -392,135 +587,211 @@
     const fortune = dailyFortune(viewer);
     $('viewer-name').textContent = fortune.greeting;
     if ($('barnum-text')) $('barnum-text').textContent = fortune.text;
-    if ($('barnum-chip-label')) $('barnum-chip-label').textContent = 'Мысль дня';
 
-    const hour = new Date().getHours();
-    if ($('greeting')) $('greeting').textContent = hour < 6 ? 'Доброй ночи' : hour < 12 ? 'Доброе утро' : hour < 18 ? 'Добрый день' : 'Добрый вечер';
-
-    const effectiveDays = sub.status === 'frozen'
-      ? Math.ceil((sub.frozen_seconds || 0) / 86400)
-      : (sub.remaining_days || 0);
-    const lowDays = sub.status === 'active' && effectiveDays <= 7;
-    const expiringSoon = sub.status === 'active' && effectiveDays <= 5;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const remSec = isFrozen ? Math.max(0, sub.frozen_seconds || 0) : Math.max(0, (sub.expires_at || 0) - nowSec);
+    const remHours = remSec > 0 ? Math.max(1, Math.ceil(remSec / 3600)) : 0;
+    const effectiveDays = isFrozen ? Math.ceil(remSec / 86400) : (sub.remaining_days || 0);
+    const lowDays = isActive && !isTrial && effectiveDays <= 7;
+    const expiringSoon = isActive && !isTrial && effectiveDays <= 5;
 
     const pill = $('status-pill');
-    const statusLabel = expiringSoon ? `Истекает · ${effectiveDays}\u00A0дн.` : (statusText[sub.status] || sub.status);
+    const statusLabel = isTrial
+      ? `Пробный · ${hourWord(remHours)}`
+      : expiringSoon
+        ? (remSec < 48 * 3600 ? `Истекает · ${hourWord(remHours)}` : `Истекает · ${effectiveDays}\u00A0дн.`)
+        : (statusText[sub.status] || sub.status);
     if ($('sub-status')) $('sub-status').textContent = statusLabel;
-    else if (pill) pill.textContent = statusLabel;
-    if (pill) pill.className = `status-pill ${sub.status}${expiringSoon ? ' expiring' : ''}`;
-
-    const daysEl = $('sub-days') || $('days-value');
-    if (daysEl) daysEl.textContent = effectiveDays;
-    const daysLabelEl = $('sub-days-label') || $('days-label');
-    if (daysLabelEl) {
-      daysLabelEl.textContent = sub.status === 'frozen'
-        ? 'дн. на паузе'
-        : sub.status === 'none'
-          ? 'нет активного плана'
-          : daysRemainingLabel(effectiveDays);
+    if (pill) {
+      const pillCls = isTrial ? 'active' : `${sub.status}${expiringSoon ? ' expiring' : ''}`;
+      pill.className = `status-pill ${pillCls}`;
     }
-    if ($('subscription-kind')) $('subscription-kind').textContent = familyMember ? 'Семейный доступ' : 'Подписка';
-    const untilEl = $('sub-until') || $('expiry-value');
+
+    const kindEl = $('subscription-kind');
+    if (kindEl) {
+      kindEl.textContent = familyMember
+        ? `Семейный доступ · ${state.family_access?.owner_name || 'Семья'}`
+        : isTrial
+          ? 'Пробный доступ (24 ч)'
+          : isNone
+            ? 'Статус подписки'
+            : isFrozen
+              ? 'Подписка на паузе'
+              : isExpired
+                ? 'Срок действия истёк'
+                : 'Остаток подписки';
+    }
+
+    const daysEl = $('sub-days');
+    const daysLabelEl = $('sub-days-label');
+    if (daysEl && daysLabelEl) {
+      if (isActive && remSec > 0 && remSec < 48 * 3600) {
+        daysEl.textContent = remHours;
+        daysLabelEl.textContent = `${pluralRu(remHours, 'час остался', 'часа осталось', 'часов осталось')}`;
+      } else if (isFrozen) {
+        daysEl.textContent = effectiveDays;
+        daysLabelEl.textContent = `${pluralRu(effectiveDays, 'день на паузе', 'дня на паузе', 'дней на паузе')}`;
+      } else if (isNone) {
+        daysEl.textContent = '0';
+        daysLabelEl.textContent = 'нет активного плана';
+      } else if (isExpired) {
+        daysEl.textContent = '0';
+        daysLabelEl.textContent = 'подписка истекла';
+      } else {
+        daysEl.textContent = effectiveDays;
+        daysLabelEl.textContent = daysRemainingLabel(effectiveDays);
+      }
+    }
+
+    const untilEl = $('sub-until');
     if (untilEl) {
-      untilEl.textContent = sub.status === 'frozen'
-        ? 'На паузе'
-        : sub.expires_at
-          ? `до ${fmtDate(sub.expires_at)}`
-          : 'Не оплачена';
-    }
-    const devEl = $('sub-devices') || $('devices-value');
-    if (devEl) devEl.textContent = familyMember ? `${sub.occupied_slots} слот` : `${sub.occupied_slots} / ${sub.device_limit}`;
-    const protoText = sub.protocol ? 'AWG' : '—';
-    const protoEl = $('sub-protocol') || $('protocol-value');
-    if (protoEl) protoEl.textContent = protoText;
-    if ($('bento-protocol-label')) {
-      $('bento-protocol-label').textContent = sub.protocol ? '3 контура' : 'слоты';
-    }
-    const nodeEl = $('sub-node') || $('card-node-value');
-    if (nodeEl) nodeEl.textContent = nodeLabel(sub.server.node, inactive);
-
-    const freeze = $('freeze-action');
-    if (freeze) {
-      freeze.hidden = familyMember || inactive;
-      freeze.dataset.action = sub.status === 'frozen' ? 'unfreeze' : 'freeze';
-      const fTitle = $('freeze-title') || freeze.querySelector('b');
-      if (fTitle) fTitle.textContent = sub.status === 'frozen' ? 'Разморозка' : 'Заморозка';
-      const fSub = $('freeze-sub') || $('freeze-caption');
-      if (fSub) fSub.textContent = sub.status === 'frozen' ? 'включить' : `${sub.freeze_bank_days}\u00A0дн.`;
-      const fIcon = freeze.querySelector('.mini-wallet-icon, .action-icon');
-      if (fIcon) fIcon.innerHTML = icon(sub.status === 'frozen' ? 'refresh' : 'snow');
+      if (isFrozen) untilEl.textContent = 'На паузе';
+      else if (isExpired && sub.expires_at) untilEl.textContent = `истекла ${fmtDate(sub.expires_at)}`;
+      else if (isActive && sub.expires_at) untilEl.textContent = remSec < 48 * 3600 ? `до ${fmtDateTime(sub.expires_at)}` : `до ${fmtDate(sub.expires_at)}`;
+      else untilEl.textContent = 'Не оплачена';
     }
 
-    const homePromo = $('home-promo');
-    if (homePromo) homePromo.hidden = true;
+    const graceNote = $('grace-note');
+    if (graceNote) {
+      const graceUntil = sub.grace_until || (isExpired && sub.expires_at ? sub.expires_at + 48 * 3600 : 0);
+      const graceLeftH = graceUntil > nowSec ? Math.ceil((graceUntil - nowSec) / 3600) : 0;
+      if (isExpired && graceLeftH > 0) {
+        graceNote.hidden = false;
+        graceNote.textContent = `Ваши ключи сохранены ещё ${hourWord(graceLeftH)} (до ${fmtDateTime(graceUntil)}). Продлите подписку — всё заработает без перенастройки.`;
+      } else {
+        graceNote.hidden = true;
+      }
+    }
 
+    const protoEl = $('sub-protocol');
+    if (protoEl) {
+      protoEl.textContent = sub.protocol ? 'AWG' : '';
+      protoEl.hidden = !sub.protocol;
+    }
+
+    const devEl = $('sub-devices');
+    if (devEl) devEl.textContent = familyMember ? slotWord(sub.occupied_slots || 1) : `${sub.occupied_slots} / ${sub.device_limit}`;
+
+    const nodeBtn = $('card-node-btn');
+    const nodeEl = $('sub-node');
+    if (nodeEl) {
+      const primaryRoute = (sub.routes || []).find((r) => r.role === 'primary');
+      nodeEl.textContent = primaryRoute
+        ? `${primaryRoute.country} ${primaryRoute.flag || ''}`.trim()
+        : nodeLabel(sub.server?.node, inactive);
+    }
+    if (nodeBtn) {
+      nodeBtn.disabled = isNone && !(sub.routes || []).length;
+    }
+
+    // Free 24h Trial CTA (only for eligible new users)
+    const trialCta = $('trial-cta');
+    if (trialCta) {
+      trialCta.hidden = !(sub.trial_available && inactive && !familyMember);
+    }
+
+    // Wide Payment CTA
     const purchase = $('purchase-cta');
-    const extendBtn = $('card-extend-btn');
-    if (extendBtn) extendBtn.hidden = true;
     if (purchase) {
       purchase.hidden = false;
       const persUnit = hasPers ? (pers.type === 'rub' ? '\u00A0₽' : '%') : '';
-      const pTitle = $('purchase-cta-title') || purchase.querySelector('b');
+      const maxDiscountPct = familyMember ? '−27%' : 'До −30%';
+      const pTitle = $('purchase-cta-title');
       if (pTitle) {
         pTitle.textContent = familyMember
           ? 'Продлить семью'
-          : lowDays
-            ? 'Продлить сейчас'
-            : ['active', 'frozen'].includes(sub.status)
-              ? 'Купить время'
-              : 'Подключить доступ';
+          : isTrial
+            ? 'Выбрать тариф'
+            : lowDays
+              ? 'Продлить сейчас'
+              : ['active', 'frozen'].includes(sub.status)
+                ? 'Купить время'
+                : 'Подключить доступ';
       }
-      const pSub = $('purchase-cta-sub') || purchase.querySelector('small');
+      const pSub = $('purchase-cta-sub');
       if (pSub) {
         pSub.textContent = hasSale
-          ? `Акция в тарифах · дни суммируются`
+          ? 'Акция в тарифах · дни суммируются'
           : hasPers
-            ? `Ваша скидка активна · дни суммируются`
+            ? 'Ваша скидка активна · дни суммируются'
             : familyMember
               ? 'Общая подписка · единый баланс'
-              : ['active', 'frozen'].includes(sub.status)
-                ? 'Продлить доступ · дни суммируются'
-                : 'Подключить мгновенно';
+              : isTrial
+                ? '1, 3 или 7 устройств · СБП в 1 клик'
+                : ['active', 'frozen'].includes(sub.status)
+                  ? 'СБП в 1 клик · дни суммируются'
+                  : 'СБП в 1 клик · мгновенная выдача';
       }
-      const badge = $('purchase-cta-badge') || $('purchase-badge');
+      const badge = $('purchase-cta-badge');
       if (badge) {
         badge.textContent = hasSale
-          ? `Акция −${sale.percent}%`
+          ? `−${sale.percent}%`
           : hasPers
             ? `−${pers.value}${persUnit}`
             : lowDays
-              ? 'Пора продлить'
-              : 'До −30%';
+              ? 'Продлить'
+              : maxDiscountPct;
       }
     }
 
-    const quickGrid = $('quick-connect-grid');
-    const qrBtn = $('quick-qr') || $('qr-action');
-    const config = $('quick-config') || $('config-action');
-    const multiDevicePlan = (sub.device_limit || 1) > 1 && !familyMember;
-    if (quickGrid) {
-      quickGrid.hidden = multiDevicePlan || (inactive && !familyMember);
-    }
-    if (qrBtn) {
-      qrBtn.hidden = multiDevicePlan || (inactive && !familyMember);
-      const qTitle = $('quick-qr-title') || qrBtn.querySelector('b');
-      const qSub = $('quick-qr-sub') || qrBtn.querySelector('small');
-      if (qTitle) qTitle.textContent = 'Большой QR';
-      if (qSub) qSub.textContent = 'все маршруты';
-    }
-    if (config) {
-      config.hidden = multiDevicePlan || (inactive && !familyMember);
-      const cTitle = $('quick-config-title') || config.querySelector('b');
-      const cSub = $('quick-config-sub') || config.querySelector('small');
-      if (cTitle) cTitle.textContent = 'Файлы в бот';
-      if (cSub) cSub.textContent = '.conf в чат';
+    // Active Sale / Personal Discount Strip on Home
+    const homePromo = $('home-promo');
+    if (homePromo) {
+      if (hasSale) {
+        const dl = sale.expires_at ? `до ${fmtDateTime(sale.expires_at)}` : 'Открыть';
+        homePromo.hidden = false;
+        homePromo.innerHTML = `<span>🔥 Акция −${sale.percent}% на продление</span><em>${esc(dl)}</em>`;
+      } else if (hasPers) {
+        const unit = pers.type === 'rub' ? '₽' : '%';
+        const dl = pers.expires_at ? `до ${fmtDateTime(pers.expires_at)}` : 'Открыть';
+        homePromo.hidden = false;
+        homePromo.innerHTML = `<span>🎁 Ваша персональная скидка −${pers.value}${unit}</span><em>${esc(dl)}</em>`;
+      } else {
+        homePromo.hidden = true;
+      }
     }
 
-    renderTrafficChart();
+    // Quick Connect Grid (ONLY for active 1-device or active family_member)
+    const quickGrid = $('quick-connect-grid');
+    const showQuickConnect = isActive && (familyMember || (sub.device_limit || 1) === 1);
+    if (quickGrid) quickGrid.hidden = !showQuickConnect;
+    if ($('quick-qr')) $('quick-qr').hidden = !showQuickConnect;
+    if ($('quick-config')) $('quick-config').hidden = !showQuickConnect;
+
+    // Onboarding vs Traffic Chart
+    const showOnboarding = isNone && !familyMember;
+    if ($('onboarding-card')) $('onboarding-card').hidden = !showOnboarding;
+    if ($('traffic-card')) $('traffic-card').hidden = showOnboarding;
+
+    // Adaptive Mini-Wallets (always 2 or 3 useful items, zero dead buttons, zero 1/3 holes!)
+    const regenBtn = $('regen-action');
+    const promoWallet = $('promo-wallet-action');
+    const troubleWallet = $('troubleshoot-wallet-action');
+    const freezeBtn = $('freeze-action');
+    const bankHours = Number.isFinite(sub.freeze_bank_hours) ? sub.freeze_bank_hours : (sub.freeze_bank_days || 0) * 24;
+
+    if (regenBtn) regenBtn.hidden = !isActive;
+    if (promoWallet) promoWallet.hidden = !(isNone || isExpired);
+    if (troubleWallet) troubleWallet.hidden = !(familyMember || isNone || isExpired || isTrial);
+    if (freezeBtn) {
+      const canShowFreeze = !familyMember && !isTrial && (isActive || isFrozen);
+      freezeBtn.hidden = !canShowFreeze;
+      freezeBtn.disabled = isActive && bankHours <= 0;
+      freezeBtn.dataset.action = isFrozen ? 'unfreeze' : 'freeze';
+      if ($('freeze-title')) $('freeze-title').textContent = isFrozen ? 'Разморозка' : 'Заморозка';
+      if ($('freeze-hint')) $('freeze-hint').textContent = isFrozen ? 'Вернуть доступ' : 'Пауза дней';
+      if ($('freeze-sub')) $('freeze-sub').textContent = isFrozen ? 'Вкл' : fmtFreezeBank(sub);
+      const fIcon = freezeBtn.querySelector('.mini-wallet-icon');
+      if (fIcon) fIcon.innerHTML = icon(isFrozen ? 'refresh' : 'snow');
+    }
+
+    if (!showOnboarding) renderTrafficChart();
   }
 
   let focusedSeriesIdx = null;
   let selectedDayIdx = 6;
+  let chartModel = null;
+  let chartEventsBound = false;
 
   function buildSmoothSplinePath(pts, minY = -Infinity, maxY = Infinity) {
     if (!pts.length) return '';
@@ -546,11 +817,9 @@
 
   function fmtTraffic(gb) {
     const v = Math.max(0, Number(gb) || 0);
-    if (v < 0.0005) return '0\u00A0ГБ';
-    if (v < 0.995) {
-      const mb = Math.max(1, Math.round(v * 1024));
-      return `${mb}\u00A0МБ`;
-    }
+    if (v < 0.0001) return '0\u00A0ГБ';
+    if (v < 0.001) return '<1\u00A0МБ';
+    if (v < 0.995) return `${Math.max(1, Math.round(v * 1024))}\u00A0МБ`;
     if (v < 10) return `${v.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')}\u00A0ГБ`;
     return `${v.toFixed(1).replace(/\.0$/, '')}\u00A0ГБ`;
   }
@@ -574,9 +843,135 @@
     return Math.ceil(target / 100) * 100;
   }
 
+  function updateTrafficSelectionInPlace() {
+    if (!chartModel) return;
+    const { series, days, dayLongLabels, inactive, subStatus, xAt, yAt } = chartModel;
+    const subEl = $('traffic-sub');
+    const totalPill = $('traffic-total-pill');
+    const activeDayLabel = dayLongLabels[selectedDayIdx] || days[selectedDayIdx];
+    const totalWeekAll = series.reduce((acc, s) => acc + s.total, 0);
+
+    if (focusedSeriesIdx !== null && series[focusedSeriesIdx]) {
+      const s = series[focusedSeriesIdx];
+      if (subEl) subEl.textContent = `${s.name} · ${activeDayLabel}: ${fmtTraffic(s.values[selectedDayIdx])} (7\u00A0дн. — ${fmtTraffic(s.total)})`;
+      if (totalPill) totalPill.textContent = fmtTraffic(s.total);
+    } else {
+      const daySum = series.reduce((acc, s) => acc + s.values[selectedDayIdx], 0);
+      if (subEl) {
+        if (subStatus === 'frozen') subEl.textContent = `Подписка на паузе · за 7 дней: ${fmtTraffic(totalWeekAll)}`;
+        else if (inactive && totalWeekAll < 0.0001) subEl.textContent = 'Подписка неактивна · трафик не расходуется';
+        else if (totalWeekAll < 0.0001) subEl.textContent = 'Учёт трафика активен · обновление каждые 5\u00A0мин';
+        else if (series.length === 1) subEl.textContent = `За 7 дней · ${activeDayLabel}: ${fmtTraffic(daySum)}`;
+        else subEl.textContent = `За 7 дней · ${activeDayLabel}: ${fmtTraffic(daySum)} (${series.length}\u00A0устр.)`;
+      }
+      if (totalPill) totalPill.textContent = fmtTraffic(totalWeekAll);
+    }
+
+    // Update legend values & focus classes IN-PLACE (preserves horizontal scrollLeft!)
+    const legendEl = $('traffic-legend');
+    if (legendEl) {
+      legendEl.querySelectorAll('[data-series-idx]').forEach((btn) => {
+        const idx = Number(btn.dataset.seriesIdx);
+        const s = series[idx];
+        if (!s) return;
+        const isFocused = focusedSeriesIdx === idx;
+        const isDimmed = focusedSeriesIdx !== null && focusedSeriesIdx !== idx;
+        btn.classList.toggle('focused', isFocused);
+        btn.classList.toggle('dimmed', isDimmed);
+        btn.setAttribute('aria-pressed', String(isFocused));
+        const valEl = btn.querySelector('.legend-val');
+        if (valEl) valEl.textContent = fmtTraffic(s.values[selectedDayIdx]);
+      });
+    }
+
+    // Update SVG cursor, active circles, series dimming, and day label highlight IN-PLACE (zero DOM teardown!)
+    const box = $('traffic-chart-box');
+    const svg = box?.querySelector('svg');
+    if (svg) {
+      const cx = xAt(selectedDayIdx).toFixed(1);
+      const cursorLine = svg.querySelector('.traffic-cursor-line');
+      if (cursorLine) {
+        cursorLine.setAttribute('x1', cx);
+        cursorLine.setAttribute('x2', cx);
+      }
+      svg.querySelectorAll('[data-series-group]').forEach((g) => {
+        const idx = Number(g.dataset.seriesGroup);
+        const s = series[idx];
+        if (!s) return;
+        g.classList.toggle('dimmed', focusedSeriesIdx !== null && focusedSeriesIdx !== idx);
+        const dot = g.querySelector('.traffic-active-dot');
+        if (dot) {
+          dot.setAttribute('cx', cx);
+          dot.setAttribute('cy', yAt(s.values[selectedDayIdx]).toFixed(1));
+        }
+      });
+      svg.querySelectorAll('[data-day-idx]').forEach((t) => {
+        t.classList.toggle('active', Number(t.dataset.dayIdx) === selectedDayIdx);
+      });
+    }
+  }
+
+  function bindChartScrubOnce() {
+    if (chartEventsBound) return;
+    const box = $('traffic-chart-box');
+    if (!box) return;
+    chartEventsBound = true;
+
+    let startX = 0, startY = 0, axis = '', tracking = false;
+    const pickDayAtClientX = (clientX) => {
+      if (!chartModel) return;
+      const rect = box.getBoundingClientRect();
+      if (!rect.width) return;
+      const relX = ((clientX - rect.left) / rect.width) * chartModel.W;
+      const idx = Math.max(0, Math.min(6, Math.round(((relX - chartModel.padL) / chartModel.plotW) * 6)));
+      if (idx !== selectedDayIdx) {
+        selectedDayIdx = idx;
+        hapticSelect();
+        updateTrafficSelectionInPlace();
+        sendEvent('traffic_interact', true);
+      }
+    };
+
+    box.addEventListener('click', (e) => {
+      const target = e.target.closest?.('[data-day-hit], [data-day-idx]');
+      if (target) {
+        const idx = Number(target.dataset.dayHit ?? target.dataset.dayIdx);
+        if (idx !== selectedDayIdx) {
+          selectedDayIdx = idx;
+          hapticSelect();
+          updateTrafficSelectionInPlace();
+          sendEvent('traffic_interact', true);
+        }
+      }
+    });
+
+    box.addEventListener('touchstart', (e) => {
+      if (e.touches.length !== 1) return;
+      startX = e.touches[0].clientX;
+      startY = e.touches[0].clientY;
+      axis = '';
+      tracking = true;
+    }, { passive: true });
+
+    box.addEventListener('touchmove', (e) => {
+      if (!tracking || e.touches.length !== 1) return;
+      const dx = e.touches[0].clientX - startX;
+      const dy = e.touches[0].clientY - startY;
+      if (!axis) {
+        if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+        axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+      }
+      if (axis === 'x') pickDayAtClientX(e.touches[0].clientX);
+    }, { passive: true });
+
+    const endTouch = () => { tracking = false; axis = ''; };
+    box.addEventListener('touchend', endTouch);
+    box.addEventListener('touchcancel', endTouch);
+  }
+
   function renderTrafficChart() {
     const card = $('traffic-card');
-    if (!card || !state) return;
+    if (!card || card.hidden || !state) return;
     const sub = state.subscription || {};
     const activeDevices = (state.devices || []).filter((d) => d.configured !== false && d.kind !== 'family_pending');
     const seriesList = activeDevices.length
@@ -585,13 +980,7 @@
           name: d.member_name || d.name || `Устройство ${d.slot || idx + 1}`,
           rawSeries: Array.isArray(d.traffic_daily_gb) ? d.traffic_daily_gb : null,
         }))
-      : [
-          {
-            slot: 1,
-            name: 'Основное устройство',
-            rawSeries: null,
-          },
-        ];
+      : [{ slot: 1, name: 'Основное устройство', rawSeries: null }];
 
     const palette = [
       { stroke: '#0f9d7a', fillTop: 'rgba(15, 157, 122, 0.28)', fillBottom: 'rgba(15, 157, 122, 0.0)' },
@@ -606,8 +995,11 @@
     const dayNames = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
     const serverDays = Array.isArray(state.traffic_days) && state.traffic_days.length === 7 ? state.traffic_days : null;
     const now = new Date();
+    const localTodayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const serverMatchesLocalToday = !serverDays || serverDays[6] === localTodayStr;
+
     const days = Array.from({ length: 7 }, (_, i) => {
-      if (i === 6) return 'Сег';
+      if (i === 6 && serverMatchesLocalToday) return 'Сег';
       if (serverDays) {
         const parts = String(serverDays[i] || '').split('-').map(Number);
         if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
@@ -616,26 +1008,37 @@
         }
       }
       const dt = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (6 - i));
-      return dayNames[dt.getDay()];
+      return i === 6 ? 'Сег' : dayNames[dt.getDay()];
+    });
+
+    const dayLongLabels = days.map((lbl, i) => {
+      if (serverMatchesLocalToday) {
+        if (i === 6) return 'Сегодня';
+        if (i === 5) return 'Вчера';
+      }
+      if (serverDays && serverDays[i]) {
+        const parts = String(serverDays[i]).split('-');
+        if (parts.length === 3) return `${parts[2]}.${parts[1]} (${lbl})`;
+      }
+      return lbl;
     });
 
     const inactive = state.cabinet_mode === 'inactive' || sub.status === 'none';
     const series = seriesList.map((item, idx) => {
       const color = palette[idx % palette.length];
-      const values = !inactive && item.rawSeries && item.rawSeries.length === 7
+      // Preserve real 7-day history even if subscription recently expired!
+      const values = item.rawSeries && item.rawSeries.length === 7
         ? item.rawSeries.map((v) => Math.max(0, Number(v) || 0))
         : [0, 0, 0, 0, 0, 0, 0];
       const total = values.reduce((acc, v) => acc + v, 0);
       return { ...item, color, values, total };
     });
 
-    if (focusedSeriesIdx !== null && focusedSeriesIdx >= series.length) {
-      focusedSeriesIdx = null;
-    }
+    if (focusedSeriesIdx !== null && focusedSeriesIdx >= series.length) focusedSeriesIdx = null;
+    if (series.length <= 1) focusedSeriesIdx = null;
 
-    const titleEl = $('traffic-title');
-    if (titleEl) {
-      titleEl.textContent = series.length > 1 ? 'Трафик по устройствам' : 'Трафик устройства';
+    if ($('traffic-title')) {
+      $('traffic-title').textContent = series.length > 1 ? 'Трафик по устройствам' : 'Трафик устройства';
     }
 
     const maxVal = Math.max(0, ...series.flatMap((s) => s.values));
@@ -643,14 +1046,13 @@
 
     const box = $('traffic-chart-box');
     const rect = box?.getBoundingClientRect();
-    const measuredW = rect?.width || box?.clientWidth || 344;
-    const measuredH = rect?.height || box?.clientHeight || 136;
-    const W = Math.max(280, Math.round(measuredW));
-    const H = Math.max(88, Math.round(measuredH));
-    const padL = 10;
-    const padR = 10;
+    if (!rect || rect.width < 10) return;
+    const W = Math.max(240, Math.round(rect.width));
+    const H = Math.max(88, Math.round(rect.height || 132));
+    const padL = 12;
+    const padR = 14;
     const padT = 10;
-    const padB = 16;
+    const padB = 18;
     const plotW = W - padL - padR;
     const plotH = H - padT - padB;
     const baselineY = padT + plotH;
@@ -658,53 +1060,36 @@
     const xAt = (i) => padL + (plotW * i) / 6;
     const yAt = (v) => padT + plotH - (Math.min(niceMax, Math.max(0, v)) / niceMax) * plotH;
 
-    const updateHeaderAndLegend = () => {
-      const subEl = $('traffic-sub');
-      const totalPill = $('traffic-total-pill');
-      const activeDayLabel = selectedDayIdx === 6 ? 'Сегодня' : selectedDayIdx === 5 ? 'Вчера' : days[selectedDayIdx];
-      const totalWeekAll = series.reduce((acc, s) => acc + s.total, 0);
-      if (focusedSeriesIdx !== null && series[focusedSeriesIdx]) {
-        const s = series[focusedSeriesIdx];
-        const dayVal = fmtTraffic(s.values[selectedDayIdx]);
-        const weekVal = fmtTraffic(s.total);
-        if (subEl) subEl.textContent = `${s.name} · ${activeDayLabel}: ${dayVal} (за 7\u00A0дн. — ${weekVal})`;
-        if (totalPill) totalPill.textContent = weekVal;
-      } else {
-        const daySum = series.reduce((acc, s) => acc + s.values[selectedDayIdx], 0);
-        if (subEl) {
-          if (inactive) subEl.textContent = 'Подписка неактивна · трафик не расходуется';
-          else if (totalWeekAll < 0.0005) subEl.textContent = 'Учёт трафика активен · обновление каждые 5\u00A0мин';
-          else subEl.textContent = `За 7 дней · ${activeDayLabel}: ${fmtTraffic(daySum)} на ${series.length}\u00A0устр.`;
-        }
-        if (totalPill) totalPill.textContent = fmtTraffic(totalWeekAll);
-      }
+    chartModel = { series, days, dayLongLabels, inactive, subStatus: sub.status, W, H, padL, plotW, xAt, yAt };
 
-      const legendEl = $('traffic-legend');
-      if (legendEl) {
-        legendEl.innerHTML = series.map((s, idx) => {
-          const isFocused = focusedSeriesIdx === idx;
-          const isDimmed = focusedSeriesIdx !== null && focusedSeriesIdx !== idx;
-          const shownVal = fmtTraffic(selectedDayIdx !== null ? s.values[selectedDayIdx] : s.total);
-          const shortName = s.name.replace(/^Dan\s+/i, '');
-          return `<button type="button" class="legend-chip${isFocused ? ' focused' : ''}${isDimmed ? ' dimmed' : ''}" data-series-idx="${idx}" aria-pressed="${isFocused}">
-            <i class="legend-dot" style="background:${s.color.stroke}"></i>
-            <span class="legend-name">${esc(shortName)}</span>
-            <b class="legend-val">${shownVal}</b>
-          </button>`;
-        }).join('');
+    const legendEl = $('traffic-legend');
+    if (legendEl) {
+      const prevScroll = legendEl.scrollLeft;
+      const single = series.length <= 1;
+      legendEl.innerHTML = series.map((s, idx) => {
+        const isFocused = focusedSeriesIdx === idx;
+        const isDimmed = focusedSeriesIdx !== null && focusedSeriesIdx !== idx;
+        return `<button type="button" class="legend-chip${isFocused ? ' focused' : ''}${isDimmed ? ' dimmed' : ''}" data-series-idx="${idx}" aria-pressed="${isFocused}"${single ? ' tabindex="-1"' : ''}>
+          <i class="legend-dot" style="background:${s.color.stroke}"></i>
+          <span class="legend-name">${esc(s.name)}</span>
+          <b class="legend-val">${fmtTraffic(s.values[selectedDayIdx])}</b>
+        </button>`;
+      }).join('');
+      legendEl.scrollLeft = prevScroll;
+      legendEl.classList.toggle('is-scrollable', legendEl.scrollWidth > legendEl.clientWidth + 6);
 
+      if (!single) {
         legendEl.querySelectorAll('[data-series-idx]').forEach((btn) => {
           btn.onclick = () => {
             const idx = Number(btn.dataset.seriesIdx);
             focusedSeriesIdx = focusedSeriesIdx === idx ? null : idx;
             hapticSelect();
-            renderTrafficChart();
+            updateTrafficSelectionInPlace();
+            sendEvent('traffic_interact', true);
           };
         });
       }
-    };
-
-    updateHeaderAndLegend();
+    }
 
     const defs = series.map((s, idx) => `
       <linearGradient id="tgrad-${idx}" x1="0" y1="0" x2="0" y2="1">
@@ -716,7 +1101,7 @@
     const gridValues = [0, niceMax / 2, niceMax];
     const gridLines = gridValues.map((gv) => {
       const y = yAt(gv).toFixed(1);
-      const labelY = gv === 0 ? (Number(y) - 3).toFixed(1) : (Number(y) + 8).toFixed(1);
+      const labelY = gv === 0 ? (Number(y) - 3).toFixed(1) : (Number(y) + 9).toFixed(1);
       return `
         <line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" class="traffic-grid-line"/>
         <text x="${padL + 2}" y="${labelY}" class="traffic-axis-label">${fmtAxisTraffic(gv)}</text>
@@ -733,7 +1118,7 @@
         <g class="traffic-series-group${isDimmed ? ' dimmed' : ''}" data-series-group="${idx}">
           <path d="${areaPath}" fill="url(#tgrad-${idx})" stroke="none"/>
           <path d="${linePath}" fill="none" stroke="${s.color.stroke}" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-          <circle cx="${activePt.x.toFixed(1)}" cy="${activePt.y.toFixed(1)}" r="3.4" fill="${s.color.stroke}" stroke="#ffffff" stroke-width="1.6"/>
+          <circle class="traffic-active-dot" cx="${activePt.x.toFixed(1)}" cy="${activePt.y.toFixed(1)}" r="3.6" fill="${s.color.stroke}" stroke="#ffffff" stroke-width="1.6"/>
         </g>
       `;
     }).join('');
@@ -746,106 +1131,213 @@
 
     const hitRectsHtml = days.map((_, i) => {
       const step = plotW / 6;
-      const x = Math.max(padL, xAt(i) - step / 2);
-      const w = i === 0 || i === 6 ? step / 2 + 6 : step;
+      const x = Math.max(0, xAt(i) - step / 2);
+      const w = i === 0 || i === 6 ? step / 2 + padR : step;
       return `<rect x="${x.toFixed(1)}" y="${padT}" width="${w.toFixed(1)}" height="${plotH + padB}" fill="transparent" stroke="none" style="cursor:pointer" data-day-hit="${i}"/>`;
     }).join('');
 
-    if (box) {
-      box.innerHTML = `
-        <svg class="traffic-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="График трафика по дням">
-          <defs>${defs}</defs>
-          ${gridLines}
-          <line x1="${cursorX}" y1="${padT}" x2="${cursorX}" y2="${baselineY}" class="traffic-cursor-line"/>
-          ${pathsHtml}
-          ${dayLabelsHtml}
-          ${hitRectsHtml}
-        </svg>
-      `;
+    box.innerHTML = `
+      <svg class="traffic-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="График трафика по дням">
+        <defs>${defs}</defs>
+        ${gridLines}
+        <line x1="${cursorX}" y1="${padT}" x2="${cursorX}" y2="${baselineY}" class="traffic-cursor-line"/>
+        ${pathsHtml}
+        ${dayLabelsHtml}
+        ${hitRectsHtml}
+      </svg>
+    `;
+    bindChartScrubOnce();
+    updateTrafficSelectionInPlace();
+  }
 
-      const selectDay = (idx) => {
-        const clamped = Math.max(0, Math.min(6, idx));
-        if (clamped === selectedDayIdx) return;
-        selectedDayIdx = clamped;
-        hapticSelect();
-        renderTrafficChart();
-      };
-
-      box.querySelectorAll('[data-day-hit], [data-day-idx]').forEach((el) => {
-        el.onclick = () => selectDay(Number(el.dataset.dayHit ?? el.dataset.dayIdx));
-      });
-
-      const svgEl = box.querySelector('svg');
-      if (svgEl) {
-        const onPointerMove = (clientX) => {
-          const rect = svgEl.getBoundingClientRect();
-          if (!rect.width) return;
-          const relX = ((clientX - rect.left) / rect.width) * W;
-          const idx = Math.round(((relX - padL) / plotW) * 6);
-          selectDay(idx);
-        };
-        svgEl.addEventListener('touchmove', (e) => {
-          if (e.touches.length === 1) onPointerMove(e.touches[0].clientX);
-        }, { passive: true });
-      }
+  function renderDeviceMetaHtml(device, subStatus) {
+    const pills = [];
+    const st = fmtLastOnline(device, subStatus);
+    pills.push(`<span class="device-meta-pill${st.cls ? ` ${st.cls}` : ''}">${esc(st.text)}</span>`);
+    const hasSplit = Number.isFinite(device.traffic_up_gb_7d) && Number.isFinite(device.traffic_down_gb_7d);
+    const total7d = Array.isArray(device.traffic_daily_gb) ? device.traffic_daily_gb.reduce((a, b) => a + (Number(b) || 0), 0) : 0;
+    if (hasSplit && (device.traffic_up_gb_7d > 0 || device.traffic_down_gb_7d > 0)) {
+      pills.push(`<span class="device-meta-pill">7\u00A0дн.: \u2191\u00A0${fmtTraffic(device.traffic_up_gb_7d)} · \u2193\u00A0${fmtTraffic(device.traffic_down_gb_7d)}</span>`);
+    } else if (total7d > 0) {
+      pills.push(`<span class="device-meta-pill">За 7\u00A0дн.: ${fmtTraffic(total7d)}</span>`);
     }
+    return `<div class="device-meta-row">${pills.join('')}</div>`;
   }
 
   function deviceCard(slot, device) {
-    if (!device) return `<article class="device-card empty"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('plus')}</div><div class="device-copy"><small>Слот ${slot}</small><strong>Свободное место</strong><span>Создайте отдельный ключ</span></div></div><button type="button" class="add-device" data-device="add" data-slot="${slot}">+ Добавить устройство</button></article>`;
-    if (device.kind === 'family_member') {
-      const active = state.subscription.status === 'active' && device.configured;
-      const unavailable = active ? '' : ' disabled';
-      const note = active ? 'Это только ваш ключ. Владелец семьи не может его скачать или перевыпустить.' : state.subscription.status === 'frozen' ? 'Владелец временно заморозил семейную подписку. Ваше место сохранено.' : state.subscription.status === 'active' ? 'Ключ временно восстанавливается. Попробуйте немного позже.' : 'Подписка владельца сейчас неактивна. Ваше место пока сохранено.';
-      return `<article class="device-card family member"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('family')}</div><div class="device-copy"><small>Ваш семейный слот ${device.slot}</small><strong>${esc(device.name)}</strong><span>Владелец: ${esc(device.owner_name)}</span></div><i class="device-state${active?'':' waiting'}" role="img" aria-label="${active?'Активен':'Ожидает'}"></i></div><div class="device-note">${note}</div><div class="device-buttons"><button type="button" class="accent" data-device="family-qr" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('qr')} Большой QR</button><button type="button" class="accent" data-device="family-get" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('download')} Файлы в бот</button><button type="button" data-device="family-rename" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('edit')} Имя</button><button type="button" data-device="family-regenerate" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('refresh')} Сброс</button><button type="button" class="danger" data-device="family-leave" data-slot="${device.slot}" data-owner="${device.owner_id}">Выйти</button></div></article>`;
+    const sub = state.subscription || {};
+    const isSubActive = sub.status === 'active';
+    const isOwnerFamilyPlan = state.access_mode !== 'family_member' && (sub.device_limit || 1) === 7;
+
+    if (!device) {
+      const dis = isSubActive ? '' : ' disabled';
+      return `<article class="device-card empty">
+        <div class="device-top">
+          <div class="device-icon" aria-hidden="true">${icon('plus')}</div>
+          <div class="device-copy"><small>Место ${slot}</small><strong>Свободное место</strong><span>${isOwnerFamilyPlan ? 'Для своего устройства или участника семьи' : 'Создайте отдельный ключ подключения'}</span></div>
+        </div>
+        <div class="empty-slot-actions">
+          <button type="button" class="add-device" data-device="add" data-slot="${slot}"${dis}>+ Моё устройство</button>
+          ${isOwnerFamilyPlan ? `<button type="button" class="add-device family-invite" data-device="invite-family" data-slot="${slot}"${dis}>Пригласить в семью</button>` : ''}
+        </div>
+      </article>`;
     }
-    if (device.kind === 'family') return `<article class="device-card family"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('family')}</div><div class="device-copy"><small>Слот ${device.slot} · Семья</small><strong>${esc(device.member_name||device.name)}</strong><span>Отдельный ключ участника</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-note">Файл и перевыпуск доступны только самому участнику.</div><button type="button" class="family-danger" data-device="revoke-family" data-slot="${device.slot}">Отозвать доступ</button></article>`;
-    if (device.kind === 'family_pending') return `<article class="device-card family pending"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('shield')}</div><div class="device-copy"><small>Слот ${device.slot} · Семья</small><strong>Приглашение отправлено</strong><span>Ожидает принятия участником</span></div><i class="device-state waiting" role="img" aria-label="Ожидает"></i></div><button type="button" class="family-danger" data-device="cancel-invite" data-slot="${device.slot}">Отменить приглашение</button></article>`;
-    return `<article class="device-card"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('phone')}</div><div class="device-copy"><small>Слот ${device.slot}</small><strong>${esc(device.name)}</strong><span>3 контура · основной, резерв и Edge</span></div><i class="device-state" role="img" aria-label="Активен"></i></div><div class="device-buttons"><button type="button" class="accent" data-device="qr" data-slot="${device.slot}">${icon('qr')} Большой QR</button><button type="button" class="accent" data-device="get" data-slot="${device.slot}">${icon('download')} Файлы в бот</button><button type="button" data-device="rename" data-slot="${device.slot}">${icon('edit')} Имя</button><button type="button" data-device="regenerate" data-slot="${device.slot}">${icon('refresh')} Сброс</button><button type="button" class="danger" data-device="delete" data-slot="${device.slot}" ${device.slot===1?'disabled':''}>${icon('trash')} Удалить</button></div></article>`;
+
+    if (device.kind === 'family_member') {
+      const active = isSubActive && device.configured;
+      const unavailable = active ? '' : ' disabled';
+      const note = active
+        ? 'Это только ваш ключ. Владелец семьи не может его скачать или перевыпустить.'
+        : sub.status === 'frozen'
+          ? 'Владелец временно заморозил семейную подписку. Ваше место сохранено.'
+          : isSubActive
+            ? 'Ключ временно восстанавливается. Попробуйте немного позже.'
+            : 'Подписка владельца сейчас неактивна. Ваше место пока сохранено.';
+      const st = fmtLastOnline(device, sub.status);
+      return `<article class="device-card family member">
+        <div class="device-top">
+          <div class="device-icon" aria-hidden="true">${icon('family')}</div>
+          <div class="device-copy"><small>Семейное место ${device.slot}</small><strong>${esc(device.name)}</strong><span>Владелец: ${esc(device.owner_name)}</span></div>
+          <i class="device-state${active ? (st.dot ? ` ${st.dot}` : '') : ' waiting'}" role="img" aria-label="${active ? st.text : 'Ожидает'}"></i>
+        </div>
+        ${renderDeviceMetaHtml(device, sub.status)}
+        <div class="device-note">${note}</div>
+        <div class="device-buttons">
+          <button type="button" class="accent" data-device="family-qr" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('qr')} Большой QR</button>
+          <button type="button" class="accent" data-device="family-get" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('download')} Файлы в бот</button>
+          <button type="button" data-device="family-rename" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('edit')} Имя</button>
+          <button type="button" data-device="family-regenerate" data-slot="${device.slot}" data-owner="${device.owner_id}"${unavailable}>${icon('refresh')} Сброс</button>
+          <button type="button" class="danger" data-device="family-leave" data-slot="${device.slot}" data-owner="${device.owner_id}">Выйти</button>
+        </div>
+      </article>`;
+    }
+
+    if (device.kind === 'family') {
+      const st = fmtLastOnline(device, sub.status);
+      return `<article class="device-card family">
+        <div class="device-top">
+          <div class="device-icon" aria-hidden="true">${icon('family')}</div>
+          <div class="device-copy"><small>Место ${device.slot} · Семья</small><strong>${esc(device.member_name || device.name)}</strong><span>Отдельный ключ участника</span></div>
+          <i class="device-state${st.dot ? ` ${st.dot}` : ''}" role="img" aria-label="${esc(st.text)}"></i>
+        </div>
+        ${renderDeviceMetaHtml(device, sub.status)}
+        <div class="device-note">Файл и перевыпуск доступны только самому участнику. При отзыве участник сохранит 12\u00A0ч на переход.</div>
+        <button type="button" class="family-danger" data-device="revoke-family" data-slot="${device.slot}">Отозвать доступ</button>
+      </article>`;
+    }
+
+    if (device.kind === 'family_pending') {
+      const isProcessing = device.invite_status === 'processing';
+      const expText = device.invite_expires_at ? `Действует до ${fmtDateTime(device.invite_expires_at)}` : 'Ожидает принятия участником';
+      return `<article class="device-card family pending">
+        <div class="device-top">
+          <div class="device-icon" aria-hidden="true">${icon('shield')}</div>
+          <div class="device-copy"><small>Место ${device.slot} · Семья</small><strong>${isProcessing ? 'Приглашение принимается…' : 'Приглашение отправлено'}</strong><span>${esc(expText)}</span></div>
+          <i class="device-state waiting" role="img" aria-label="Ожидает"></i>
+        </div>
+        ${device.invite_url && !isProcessing ? `<div class="empty-slot-actions"><button type="button" class="add-device family-invite" data-share-invite="${esc(device.invite_url)}">Поделиться</button><button type="button" class="add-device" data-copy-invite="${esc(device.invite_url)}">Копировать</button></div>` : ''}
+        <button type="button" class="family-danger" data-device="cancel-invite" data-slot="${device.slot}"${isProcessing ? ' disabled' : ''}>${isProcessing ? 'Подключается…' : 'Отменить приглашение'}</button>
+      </article>`;
+    }
+
+    const st = fmtLastOnline(device, sub.status);
+    const dis = isSubActive ? '' : ' disabled';
+    return `<article class="device-card">
+      <div class="device-top">
+        <div class="device-icon" aria-hidden="true">${icon('phone')}</div>
+        <div class="device-copy"><small>Место ${device.slot}</small><strong>${esc(device.name)}</strong><span>3 маршрута · основной, резерв и доп.</span></div>
+        <i class="device-state${st.dot ? ` ${st.dot}` : ''}" role="img" aria-label="${esc(st.text)}"></i>
+      </div>
+      ${renderDeviceMetaHtml(device, sub.status)}
+      <div class="device-buttons">
+        <button type="button" class="accent" data-device="qr" data-slot="${device.slot}"${dis}>${icon('qr')} Большой QR</button>
+        <button type="button" class="accent" data-device="get" data-slot="${device.slot}"${dis}>${icon('download')} Файлы в бот</button>
+        <button type="button" data-device="rename" data-slot="${device.slot}"${dis}>${icon('edit')} Имя</button>
+        <button type="button" data-device="regenerate" data-slot="${device.slot}"${dis}>${icon('refresh')} Сброс</button>
+        <button type="button" class="danger" data-device="delete" data-slot="${device.slot}"${device.slot === 1 || !isSubActive ? ' disabled' : ''}>${icon('trash')} Удалить</button>
+      </div>
+    </article>`;
   }
 
   function renderDevices() {
-    const sub = state.subscription;
-    const list = $('devices-list') || $('device-list');
-    const summary = $('devices-summary') || $('device-summary');
-    const slotPill = $('devices-pill') || $('device-slot-pill');
-    const slotBar = $('devices-progress') || $('device-slot-bar');
+    const sub = state.subscription || {};
+    const list = $('devices-list');
+    const summary = $('devices-summary');
+    const slotPill = $('devices-pill');
+    const slotBar = $('devices-progress');
+    const banner = $('devices-status-banner');
+
+    if (banner) {
+      if (sub.status === 'frozen') {
+        banner.hidden = false;
+        banner.textContent = '❄️ Подписка на паузе. Разморозьте её на Главной, чтобы скачивать ключи и управлять устройствами.';
+      } else if (sub.status === 'expired') {
+        banner.hidden = false;
+        banner.textContent = '⏳ Подписка истекла. Продлите доступ в разделе «Купить», чтобы ключи снова заработали без перенастройки.';
+      } else {
+        banner.hidden = true;
+      }
+    }
+
     if (state.access_mode === 'family_member') {
-      if (summary) summary.textContent = `Семейный доступ · ${state.family_access.owner_name}`;
-      if (slotPill) slotPill.textContent = '1 / 1 слот';
+      const cnt = state.devices.length || 1;
+      if (summary) summary.textContent = `Семейный доступ · ${state.family_access?.owner_name || 'Семья'}`;
+      if (slotPill) slotPill.textContent = `${cnt} / ${cnt} ${pluralRu(cnt, 'место', 'места', 'мест')}`;
       if (slotBar) slotBar.style.width = '100%';
       if (list) list.innerHTML = state.devices.map((device) => deviceCard(device.slot, device)).join('');
       return;
     }
-    const familyCount = (state.family.members || 0) + (state.family.pending || 0);
-    if (summary) summary.textContent = `Занято ${sub.occupied_slots} из ${sub.device_limit}${familyCount ? ` · семейных мест ${familyCount}` : ''}`;
+
+    const familyCount = (state.family?.members || 0) + (state.family?.pending || 0);
+    if (summary) summary.textContent = `Занято ${sub.occupied_slots} из ${sub.device_limit}${familyCount ? ` · семейных: ${familyCount}` : ''}`;
     if (slotPill) slotPill.textContent = `${sub.occupied_slots} / ${sub.device_limit}`;
     if (slotBar) {
       const pct = sub.device_limit > 0 ? Math.min(100, Math.round((sub.occupied_slots / sub.device_limit) * 100)) : 0;
       slotBar.style.width = `${pct}%`;
     }
+
     if (state.cabinet_mode === 'inactive' && !state.devices.length) {
-      if (list) list.innerHTML = `<article class="device-card empty"><div class="device-top"><div class="device-icon" aria-hidden="true">${icon('shield')}</div><div class="device-copy"><small>Подписка не активна</small><strong>Нет активных устройств</strong><span>Оформите подписку, чтобы создать ключи AmneziaWG</span></div></div><button type="button" class="add-device" data-go-plans>Выбрать тариф</button></article>`;
+      if (list) {
+        list.innerHTML = `<article class="device-card empty">
+          <div class="device-top">
+            <div class="device-icon" aria-hidden="true">${icon('shield')}</div>
+            <div class="device-copy"><small>Подписка не активна</small><strong>Нет активных устройств</strong><span>Оформите подписку или активируйте 24\u00A0ч тест, чтобы получить ключи</span></div>
+          </div>
+          <div class="empty-slot-actions">
+            ${sub.trial_available ? '<button type="button" class="add-device family-invite" data-action="trial">Тест 24\u00A0ч</button>' : ''}
+            <button type="button" class="add-device" data-go-plans>Выбрать тариф</button>
+          </div>
+        </article>`;
+      }
       return;
     }
+
     const map = new Map(state.devices.map((d) => [d.slot, d]));
-    if (list) list.innerHTML = Array.from({length: sub.device_limit}, (_, i) => deviceCard(i + 1, map.get(i + 1))).join('');
+    if (list) list.innerHTML = Array.from({ length: sub.device_limit }, (_, i) => deviceCard(i + 1, map.get(i + 1))).join('');
   }
 
   function renderPlans() {
-    const current = state.subscription.device_limit || 1;
+    const sub = state.subscription || {};
+    const current = sub.device_limit || 1;
     const familyMember = state.access_mode === 'family_member';
     const familyLimit = state.family_access?.plan_limit || 7;
-    if (familyMember) selectedDevices = familyLimit;
-    else if (![1, 3, 7].includes(selectedDevices)) selectedDevices = current;
+    const hasActiveSub = !familyMember && ['active', 'frozen'].includes(sub.status);
+    const isTrial = !familyMember && isTrialSubscription(sub);
 
-    const sale = state.promotions?.global_sale, pers = state.promotions?.personal_discount;
+    if (familyMember) selectedDevices = familyLimit;
+    else if (![1, 3, 7].includes(selectedDevices)) {
+      selectedDevices = [1, 3, 7].includes(sub.remembered_device_limit) ? sub.remembered_device_limit : current;
+    }
+
+    const sale = state.promotions?.global_sale;
+    const pers = state.promotions?.personal_discount;
     const hasSale = Boolean(sale?.active && sale.percent > 0);
     const hasPers = Boolean(pers?.active && pers.value > 0);
     const banner = $('promo-banner');
     if (banner) {
       if (hasSale) {
-        const monthsList = (sale.months || []).length === 4 ? 'на все периоды' : `на ${(sale.months || []).join(' / ')} мес.`;
+        const sm = Array.isArray(sale.months) ? sale.months : [];
+        const monthsList = !sm.length || sm.length === 4 ? 'на все периоды' : `на ${sm.join(' / ')} мес.`;
         const deadline = sale.expires_at ? `До ${fmtDateTime(sale.expires_at)}` : 'Акция';
         banner.hidden = false;
         banner.className = 'promo-banner';
@@ -861,96 +1353,181 @@
       }
     }
 
-    const selector = $('device-limit-selector') || $('device-selector');
+    const selector = $('device-limit-selector');
     const limits = [1, 3, 7];
     const segIdx = Math.max(0, limits.indexOf(selectedDevices));
     selector.classList.toggle('single', familyMember);
     selector.style.setProperty('--seg-idx', String(segIdx));
     selector.innerHTML = familyMember
-      ? `<div class="seg-pill" aria-hidden="true"></div><button type="button" class="active" aria-pressed="true" disabled>${familyLimit} устройств · вся семья</button>`
-      : `<div class="seg-pill" aria-hidden="true"></div>` + limits.map((n) => `<button type="button" data-limit="${n}" aria-pressed="${n===selectedDevices}" class="${n===selectedDevices?'active':''}">${n===current?`${n} · сейчас`:`${n} устр.`}</button>`).join('');
+      ? `<div class="seg-pill" aria-hidden="true"></div><button type="button" class="active" aria-pressed="true" disabled>${deviceWord(familyLimit)} · вся семья</button>`
+      : `<div class="seg-pill" aria-hidden="true"></div>` + limits.map((n) => {
+          const isCurrentBadge = hasActiveSub && n === current && !isTrial;
+          return `<button type="button" data-limit="${n}" aria-pressed="${n === selectedDevices}" class="${n === selectedDevices ? 'active' : ''}">${isCurrentBadge ? `${n} · сейчас` : `${n}\u00A0устр.`}</button>`;
+        }).join('');
 
-    const active = !familyMember && ['active','frozen'].includes(state.subscription.status);
-    const changing = active && selectedDevices !== current;
-    const context = $('plan-change-box') || $('plan-context');
-    const captionEl = $('plans-subtitle') || $('plans-caption');
-    const listEl = $('plans-list') || $('plan-list');
-    const selectedOption = state.plan_change?.[String(selectedDevices)] || {allowed:true, reason:''};
+    // Trial users on 24h test can directly purchase 1 / 3 / 7 devices without forced change_plan!
+    const changing = hasActiveSub && !isTrial && selectedDevices !== current;
+    const context = $('plan-change-box');
+    const captionEl = $('plans-subtitle');
+    const listEl = $('plans-list');
+    const selectedOption = state.plan_change?.[String(selectedDevices)] || { allowed: true, reason: '', affected: [] };
+    const blockedByFamily = Boolean(
+      selectedOption.blocked_by_family ?? (selectedOption.reason && /семейн/i.test(selectedOption.reason))
+    );
+    const affectedSlots = Array.isArray(selectedOption.affected) ? selectedOption.affected : [];
+    const expiredDowngradeConfirm = !hasActiveSub && !familyMember && !blockedByFamily && (selectedOption.needs_confirm || (!selectedOption.allowed && affectedSlots.length > 0));
+
     if (changing) {
-      const option = selectedOption;
-      const frozen = state.subscription.status === 'frozen';
-      const oldItem = state.plans.find((p)=>p.months===1).prices.find((p)=>p.devices===current);
-      const newItem = state.plans.find((p)=>p.months===1).prices.find((p)=>p.devices===selectedDevices);
-      const oldPrice = oldItem.base_amount || oldItem.amount;
-      const newPrice = newItem.base_amount || newItem.amount;
-      const seconds = frozen ? state.subscription.frozen_seconds : Math.max(0, state.subscription.expires_at - Date.now()/1000);
-      const newDays = Math.max(1, Math.ceil(seconds * oldPrice / newPrice / 86400));
-      const blocked = frozen ? 'Сначала разморозьте подписку.' : option.reason;
+      const frozen = sub.status === 'frozen';
+      const oldItem = state.plans?.find((p) => p.months === 1)?.prices?.find((p) => p.devices === current);
+      const newItem = state.plans?.find((p) => p.months === 1)?.prices?.find((p) => p.devices === selectedDevices);
+      const oldPrice = oldItem?.base_amount || oldItem?.amount || 299;
+      const newPrice = newItem?.base_amount || newItem?.amount || 299;
+      const seconds = frozen ? (sub.frozen_seconds || 0) : Math.max(0, (sub.expires_at || 0) - Date.now() / 1000);
+      const newSec = Math.max(60, Math.round(seconds * oldPrice / newPrice));
+      const newDays = Math.max(1, Math.ceil(newSec / 86400));
+      const newUntil = fmtDate(Math.floor(Date.now() / 1000) + newSec);
+      const blocked = frozen ? 'Сначала разморозьте подписку.' : selectedOption.reason;
       context.hidden = false;
-      context.className = `plan-context${blocked?' blocked':''}`;
-      context.innerHTML = `<small>Изменение текущего тарифа</small><h2>${current} → ${selectedDevices} устройств</h2><p>Это не покупка: деньги не списываются. Остаток времени будет пересчитан по стоимости тарифа — примерно <b>${newDays}\u00A0дн.</b></p>${blocked?`<div class="plan-warning">${esc(blocked)}</div>`:'<div class="plan-safe">Ни один ключ не будет удалён автоматически.</div>'}<button type="button" data-change-plan ${blocked?'disabled':''}>Изменить лимит</button>`;
+      context.className = `plan-context${blocked ? ' blocked' : ''}`;
+      context.innerHTML = `<small>Изменение текущего тарифа</small><h2>${current} → ${deviceWord(selectedDevices)}</h2><p>Это не покупка: деньги не списываются. Остаток пересчитается по стоимости тарифа — примерно <b>${newDays}\u00A0дн.</b>${!frozen ? ` (до ${esc(newUntil)})` : ''}.</p>${blocked ? `<div class="plan-warning">${esc(blocked)}</div>` : '<div class="plan-safe">Ни один ключ не будет удалён автоматически.</div>'}<button type="button" data-change-plan ${blocked ? 'disabled' : ''}>Изменить лимит</button>${blocked && !frozen ? '<button type="button" class="add-device" data-go-devices style="margin-top:8px">Перейти к устройствам</button>' : ''}`;
       if (captionEl) captionEl.textContent = 'Смена лимита отделена от покупки времени.';
       if (listEl) listEl.innerHTML = '';
       return;
     }
-    if (!selectedOption.allowed && !changing) {
+
+    if (!selectedOption.allowed && !expiredDowngradeConfirm) {
       context.hidden = false;
       context.className = 'plan-context blocked';
-      context.innerHTML = `<small>Тариф недоступен</small><h2>${selectedDevices} устройств</h2><p>Семейные места принадлежат другим пользователям и не могут исчезнуть при покупке.</p><div class="plan-warning">${esc(selectedOption.reason)}</div>`;
-      if (captionEl) captionEl.textContent = 'Сначала освободите семейные места.';
+      context.innerHTML = blockedByFamily
+        ? `<small>Тариф недоступен</small><h2>${deviceWord(selectedDevices)}</h2><p>Семейные места принадлежат другим пользователям и не могут исчезнуть при покупке.</p><div class="plan-warning">${esc(selectedOption.reason)}</div><button type="button" class="add-device" data-go-devices style="margin-top:8px">Открыть устройства</button>`
+        : `<small>Тариф временно недоступен</small><h2>${deviceWord(selectedDevices)}</h2><div class="plan-warning">${esc(selectedOption.reason || 'Сначала освободите лишние места.')}</div>`;
+      if (captionEl) captionEl.textContent = blockedByFamily ? 'Сначала освободите семейные места.' : 'Сначала освободите лишние места.';
       if (listEl) listEl.innerHTML = '';
       return;
     }
-    if (familyMember) {
+
+    if (expiredDowngradeConfirm) {
+      const names = affectedSlots.map((a) => `место ${a.slot} (${a.name})`).join(', ');
+      context.hidden = false;
+      context.className = 'plan-context blocked';
+      context.innerHTML = `<small>Понижение тарифа при продлении</small><h2>Переход на ${deviceWord(selectedDevices)}</h2><p>При оплате этого тарифа лишние устройства будут отключены: <b>${esc(names || 'слоты выше лимита')}</b>.</p><div class="plan-warning">Если хотите сохранить все устройства, выберите прежний тариф.</div>`;
+      if (captionEl) captionEl.textContent = 'Выберите срок — лишние места будут отключены после оплаты.';
+    } else if (familyMember) {
       context.hidden = false;
       context.className = 'plan-context family-switch';
-      context.innerHTML = `<small>Общая семейная подписка</small><h2>Оплата для всей семьи</h2><p>Дни будут начислены подписке владельца <b>${esc(state.family_access.owner_name)}</b> и автоматически продлят доступ всех участников.</p><div class="plan-safe">Если позже выйти из семьи, уже оплаченные дни останутся у семейной подписки. Личный тариф покупается только после выхода.</div>`;
+      context.innerHTML = `<small>Общая семейная подписка</small><h2>Оплата для всей семьи</h2><p>Дни будут начислены подписке владельца <b>${esc(state.family_access?.owner_name || 'Семья')}</b> и автоматически продлят доступ всех участников.</p><div class="plan-safe">Если позже выйти из семьи, уже оплаченные дни останутся у семейной подписки. Личный тариф покупается только после выхода.</div>`;
       if (captionEl) captionEl.textContent = 'Выберите срок продления общей подписки.';
+    } else if (isTrial) {
+      context.hidden = false;
+      context.className = 'plan-context';
+      context.innerHTML = `<small>Переход с пробного доступа</small><h2>Выберите любой тариф</h2><p>Вы можете сразу оплатить ${deviceWord(selectedDevices)} — оставшиеся часы теста добавятся к подписке.</p>`;
+      if (captionEl) captionEl.textContent = 'Оплата по СБП в 1 клик или картой.';
     } else {
       context.hidden = true;
-      if (captionEl) captionEl.textContent = active ? 'Дни суммируются с текущим остатком.' : 'Выберите количество устройств и период.';
+      if (captionEl) captionEl.textContent = hasActiveSub ? 'Дни суммируются с текущим остатком.' : 'Выберите количество устройств и период.';
     }
-    const defaultPct = { 1: 0, 3: 8, 6: 17, 12: 30 };
-    if (listEl) listEl.innerHTML = state.plans.map((plan) => {
-      const item = plan.prices.find((p) => p.devices === selectedDevices);
-      const baseAmount = item.base_amount || item.amount;
-      const hasDiscount = item.amount < baseAmount;
-      const monthlyTotal = item.monthly_total || baseAmount;
-      const totalSaved = Math.max(0, monthlyTotal - item.amount);
-      const computedPct = plan.months > 1 && monthlyTotal > baseAmount
-        ? Math.round((1 - baseAmount / monthlyTotal) * 100)
-        : (defaultPct[plan.months] || 0);
-      const tierLabel = plan.months === 1
-        ? 'Базовый'
-        : plan.months === 3
-          ? `Популярный${computedPct > 0 ? ` · −${computedPct}%` : ''}`
-          : plan.months === 6
-            ? `Выгода${computedPct > 0 ? ` −${computedPct}%` : ''}`
-            : `Максимум выгоды${computedPct > 0 ? ` −${computedPct}%` : ''}`;
-      const perMonth = Math.max(1, Math.round(item.amount / plan.months));
-      const featured = plan.months === 12;
-      const popular = plan.months === 3;
-      const badges = [`<span class="plan-pill">${esc(tierLabel)}</span>`];
-      if (item.discount_label) badges.push(`<span class="plan-pill sale">${esc(item.discount_label)}</span>`);
-      else if (totalSaved > 0 && (plan.months > 1 || hasDiscount)) badges.push(`<span class="plan-pill save">Экономия ${totalSaved}\u00A0₽</span>`);
-      return `<article class="plan-card ${featured?'featured':popular?'popular':''} ${hasDiscount?'sale-active':''}"><div><div class="plan-badges">${badges.join('')}</div><strong>${monthWord(plan.months)}</strong><div class="price-row"><strong>${item.amount}\u00A0₽</strong>${hasDiscount?`<s>${baseAmount}\u00A0₽</s>`:''}</div><div class="plan-meta">${selectedDevices}\u00A0устр. · ≈${perMonth}\u00A0₽/мес.</div></div><button type="button" data-buy="${plan.months}" ${!state.payments_enabled?'disabled':''}>${hasDiscount?'Забрать':'Выбрать'}</button></article>`;
-    }).join('');
+
+    const defaultPct = { 1: 0, 3: 8, 6: 17, 12: 27 };
+    if (listEl) {
+      listEl.innerHTML = (state.plans || []).map((plan) => {
+        const item = plan.prices?.find((p) => p.devices === selectedDevices);
+        if (!item) return '';
+        const baseAmount = item.base_amount || item.amount;
+        const hasDiscount = item.amount < baseAmount;
+        const monthlyTotal = item.monthly_total || baseAmount;
+        const totalSaved = Math.max(0, monthlyTotal - item.amount);
+        const computedPct = plan.months > 1 && monthlyTotal > baseAmount
+          ? Math.round((1 - baseAmount / monthlyTotal) * 100)
+          : (defaultPct[plan.months] || 0);
+        const tierLabel = plan.months === 1
+          ? 'Базовый'
+          : plan.months === 3
+            ? `Популярный${computedPct > 0 ? ` · −${computedPct}%` : ''}`
+            : plan.months === 6
+              ? `Выгода${computedPct > 0 ? ` −${computedPct}%` : ''}`
+              : `Максимум выгоды${computedPct > 0 ? ` −${computedPct}%` : ''}`;
+        const perMonth = Math.max(1, Math.round(item.amount / plan.months));
+        const featured = plan.months === 12;
+        const popular = plan.months === 3;
+        const badges = [`<span class="plan-pill">${esc(tierLabel)}</span>`];
+        if (item.discount_label) badges.push(`<span class="plan-pill sale">${esc(item.discount_label)}</span>`);
+        else if (totalSaved > 0 && (plan.months > 1 || hasDiscount)) badges.push(`<span class="plan-pill save">Экономия ${totalSaved}\u00A0₽</span>`);
+        return `<article class="plan-card ${featured ? 'featured' : popular ? 'popular' : ''} ${hasDiscount ? 'sale-active' : ''}"><div><div class="plan-badges">${badges.join('')}</div><strong>${monthWord(plan.months)}</strong><div class="price-row"><strong>${item.amount}\u00A0₽</strong>${hasDiscount ? `<s>${baseAmount}\u00A0₽</s>` : ''}</div><div class="plan-meta">${selectedDevices}\u00A0устр. · ≈${perMonth}\u00A0₽/мес.</div></div><button type="button" data-buy="${plan.months}" data-confirm-downgrade="${expiredDowngradeConfirm ? '1' : ''}" ${!state.payments_enabled ? 'disabled' : ''}>${hasDiscount ? 'Забрать' : 'Выбрать'}</button></article>`;
+      }).join('');
+    }
   }
 
   function renderMore() {
+    const sub = state.subscription || {};
+    const viewer = state.viewer || {};
     const familyMember = state.access_mode === 'family_member';
-    $('profile-id').textContent = `Telegram ID ${state.viewer.id}`;
-    $('metric-one-label').textContent = familyMember ? 'Тип доступа' : 'Заморозка';
+    const uname = viewer.username ? ` · @${viewer.username}` : '';
+    $('profile-id').textContent = `Telegram ID ${viewer.id}${uname}`;
+
+    $('metric-one-label').textContent = familyMember ? 'Доступ' : 'Заморозка';
     $('metric-one-icon').innerHTML = icon(familyMember ? 'family' : 'snow');
-    $('freeze-bank').textContent = familyMember ? 'Семья' : `${state.subscription.freeze_bank_days}\u00A0дн.`;
-    $('referral-count').textContent = state.referral?.invited ?? 0;
-    $('family-count').textContent = familyMember ? state.family_access.owner_name : state.family.members ? `${state.family.members}\u00A0чел.` : 'Нет';
+    $('freeze-bank').textContent = familyMember ? 'Семья' : (sub.status === 'none' ? '—' : fmtFreezeBank(sub));
+
+    const ref = state.referral || {};
+    $('referral-count').textContent = ref.invited ?? 0;
+    if ($('profile-referral-sub')) {
+      $('profile-referral-sub').textContent = ref.bonus_days
+        ? `Начислено +${ref.bonus_days}\u00A0дн. · приглашено ${ref.invited || 0}`
+        : 'Подарите другу 24\u00A0ч и получите +7 дней';
+    }
+
+    const famTotal = (state.family?.members || 0) + (state.family?.pending || 0);
+    if ($('metric-three-label')) $('metric-three-label').textContent = familyMember ? 'Владелец' : 'Семья';
+    $('family-count').textContent = familyMember
+      ? (state.family_access?.owner_name || 'Семья')
+      : famTotal
+        ? `${famTotal}\u00A0${pluralRu(famTotal, 'место', 'места', 'мест')}`
+        : 'Нет';
+
+    // Autorenew row (only for personal subscribers when backend exposes sub.autorenew)
+    const arRow = $('autorenew-row');
+    const arToggle = $('autorenew-toggle');
+    if (arRow && arToggle) {
+      if (!familyMember && sub.autorenew && typeof sub.autorenew.enabled === 'boolean') {
+        arRow.hidden = false;
+        arToggle.setAttribute('aria-checked', String(sub.autorenew.enabled));
+        if ($('autorenew-sub')) {
+          $('autorenew-sub').textContent = sub.autorenew.enabled
+            ? (sub.autorenew.method_title ? `Активно · ${sub.autorenew.method_title}` : 'Включено · привяжется при оплате')
+            : (sub.autorenew.method_title ? `Выключено (${sub.autorenew.method_title})` : 'Выключено');
+        }
+      } else {
+        arRow.hidden = true;
+      }
+    }
+
     const rows = state.payment_history || [];
     $('payment-history').innerHTML = rows.length
       ? rows.map((p) => {
-          const family = p.purpose === 'family_topup';
-          const source = family && p.payer_id !== state.viewer.id ? ' · оплатил участник' : '';
-          return `<article class="history-row"><span class="history-icon" aria-hidden="true">₽</span><div><b>${family?'Вся семья':monthWord(p.months)} · ${p.devices}\u00A0устр.</b><small>${fmtDate(p.applied_at||p.created_at)} · ${esc(paymentText[p.status]||p.status)}${source}</small></div><strong>${p.amount}\u00A0₽</strong></article>`;
+          const isFam = p.purpose === 'family_topup';
+          const isDetach = p.purpose === 'family_detach';
+          const title = isFam
+            ? `Вся семья · ${monthWord(p.months)} · ${p.devices}\u00A0устр.`
+            : isDetach
+              ? `Личная подписка · ${monthWord(p.months)} · ${p.devices}\u00A0устр.`
+              : `${monthWord(p.months)} · ${p.devices}\u00A0устр.`;
+          const source = isFam && p.payer_id && p.payer_id !== viewer.id ? ' · оплатил участник' : '';
+          const tags = [];
+          if (p.method_title) tags.push(`<span class="history-tag">${esc(p.method_title)}</span>`);
+          if (p.auto_renewal) tags.push('<span class="history-tag auto">Авто</span>');
+          if (p.status === 'canceled' && p.cancel_reason) tags.push(`<span class="history-tag warn">${esc(p.cancel_reason)}</span>`);
+          const needSupport = p.status === 'manual_review' || p.status === 'failed';
+          return `<article class="history-row">
+            <span class="history-icon" aria-hidden="true">₽</span>
+            <div>
+              <b>${title}</b>
+              <small>${fmtDate(p.applied_at || p.created_at)} · ${esc(paymentText[p.status] || p.status)}${source}</small>
+              ${tags.length ? `<div class="history-meta">${tags.join('')}</div>` : ''}
+              ${needSupport ? '<button type="button" class="history-support-btn" data-open-support>Написать в поддержку</button>' : ''}
+            </div>
+            <strong>${p.amount}\u00A0₽</strong>
+          </article>`;
         }).join('')
       : '<div class="empty-history">Платежей пока нет</div>';
   }
@@ -960,27 +1537,302 @@
     renderDevices();
     renderPlans();
     renderMore();
+    restorePendingPayment();
     bindDynamic();
   }
 
   function bindDynamic() {
-    document.querySelectorAll('[data-limit]').forEach((b) => b.onclick = () => {
-      const nextLimit = Number(b.dataset.limit);
-      if (nextLimit === selectedDevices) return;
-      selectedDevices = nextLimit;
-      hapticSelect();
-      renderPlans();
-      bindDynamic();
+    document.querySelectorAll('[data-limit]').forEach((b) => {
+      b.onclick = () => {
+        const nextLimit = Number(b.dataset.limit);
+        if (nextLimit === selectedDevices) return;
+        selectedDevices = nextLimit;
+        hapticSelect();
+        renderPlans();
+        bindDynamic();
+      };
     });
-    document.querySelectorAll('[data-buy]').forEach((b) => b.onclick = () => startPurchase(Number(b.dataset.buy)));
+    document.querySelectorAll('[data-buy]').forEach((b) => {
+      b.onclick = () => startPurchase(Number(b.dataset.buy), b.dataset.confirmDowngrade === '1');
+    });
     const changePlan = document.querySelector('[data-change-plan]');
     if (changePlan) changePlan.onclick = confirmPlanChange;
-    document.querySelectorAll('[data-device]').forEach((b) => b.onclick = () => devicePrompt(b.dataset.device, Number(b.dataset.slot), Number(b.dataset.owner || 0)));
-    document.querySelectorAll('[data-go-plans]').forEach((b) => b.onclick = () => go('plans'));
+    document.querySelectorAll('[data-device]').forEach((b) => {
+      b.onclick = () => devicePrompt(b.dataset.device, Number(b.dataset.slot), Number(b.dataset.owner || 0));
+    });
+    document.querySelectorAll('[data-go-plans]').forEach((b) => { b.onclick = () => go('plans'); });
+    document.querySelectorAll('[data-go-devices]').forEach((b) => { b.onclick = () => go('devices'); });
+    document.querySelectorAll('[data-action="trial"]').forEach((b) => { b.onclick = activateTrial; });
+    document.querySelectorAll('[data-share-invite]').forEach((b) => {
+      b.onclick = () => shareTelegramLink(b.dataset.shareInvite, 'Приглашаю тебя в семейный доступ neXus Ray! Нажми на ссылку, чтобы подключиться:');
+    });
+    document.querySelectorAll('[data-copy-invite]').forEach((b) => {
+      b.onclick = () => copyText(b.dataset.copyInvite, 'Ссылка приглашения скопирована');
+    });
+    document.querySelectorAll('[data-open-support]').forEach((b) => {
+      b.onclick = () => openSupport();
+    });
   }
 
-  async function openQrModal(slot=1, ownerId=0, freshNotice='') {
-    const data = await runAction('qr', {slot, owner_id:ownerId||undefined}, {refresh:false, progress:'Готовим большой QR-код…', notifySuccess:false});
+  function shareTelegramLink(url, text) {
+    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`;
+    openTgUrl(shareUrl);
+  }
+
+  function openSupport() {
+    sendEvent('support', true);
+    if (state?.support_url) openTgUrl(state.support_url);
+  }
+
+  function openRoutesSheet() {
+    if (!state) return;
+    sendEvent('routes', true);
+    const sub = state.subscription || {};
+    const routes = Array.isArray(sub.routes) && sub.routes.length
+      ? sub.routes
+      : sub.server?.node
+        ? [{ role: 'primary', title: 'Основной маршрут', country: nodeLabel(sub.server.node, false), flag: '', node: String(sub.server.node).toUpperCase(), filename: '', status: 'ok', status_label: 'Активен' }]
+        : [];
+    resetSheetTransform();
+    $('sheet-content').innerHTML = `
+      <h2 id="sheet-title">Ваши маршруты</h2>
+      <p>У каждого устройства есть 3 независимых страны. Если в сети просадка — просто переключите тумблер на другую страну в приложении.</p>
+      <div class="route-list">
+        ${routes.length
+          ? routes.map((r) => `
+            <div class="route-item">
+              <div class="route-item-copy">
+                <strong>${esc(r.flag ? `${r.flag} ${r.country}` : r.country)}</strong>
+                <small>${esc(r.title)}${r.filename ? ` · ${esc(r.filename)}` : ''}</small>
+              </div>
+              <span class="route-status-badge ${esc(r.status || 'unknown')}">${esc(r.status_label || 'Проверяется')}</span>
+            </div>`).join('')
+          : '<div class="empty-history">Маршруты появятся сразу после активации подписки.</div>'}
+      </div>
+      <div class="sheet-actions">
+        <button type="button" id="routes-trouble">Не работает?</button>
+        <button type="button" class="primary" id="routes-close">Понятно</button>
+      </div>`;
+    $('routes-trouble').onclick = openTroubleshootSheet;
+    $('routes-close').onclick = closeSheet;
+    showSheetModal($('routes-close'));
+  }
+
+  function openTroubleshootSheet() {
+    sendEvent('troubleshoot', true);
+    const routes = state?.subscription?.routes || [];
+    const altRoute = routes.find((r) => r.role === 'edge' && r.status === 'ok') || routes.find((r) => r.role === 'reserve');
+    const altHint = altRoute ? `Попробуйте включить <b>${esc(altRoute.country)}</b> (${esc(altRoute.filename || altRoute.title)}).` : 'Попробуйте переключить тумблер на резервную или доп. страну.';
+    resetSheetTransform();
+    $('sheet-content').innerHTML = `
+      <h2 id="sheet-title">Быстрая диагностика</h2>
+      <p>Чаще всего доступ восстанавливается за 15 секунд — проверьте 4 пункта:</p>
+      <div class="guide-steps">
+        <div class="guide-step"><b>1</b><div><b>Включён только один тумблер.</b> Два активных маршрута одновременно мешают друг другу.</div></div>
+        <div class="guide-step"><b>2</b><div><b>Смените страну.</b> ${altHint}</div></div>
+        <div class="guide-step"><b>3</b><div><b>Переключите сеть</b> (Wi-Fi ↔ мобильная сеть или авиарежим на 5 секунд).</div></div>
+        <div class="guide-step"><b>4</b><div><b>Обновите ключи.</b> Если давно не обновляли — нажмите «Сброс» на карточке устройства (старый ключ продолжит работать ещё 30\u00A0мин).</div></div>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" id="tr-support">Написать в поддержку</button>
+        <button type="button" class="primary" id="tr-close">Закрыть</button>
+      </div>`;
+    $('tr-support').onclick = () => { closeSheet(); openSupport(); };
+    $('tr-close').onclick = closeSheet;
+    showSheetModal($('tr-close'));
+  }
+
+  async function requestInstaller(platform) {
+    const r = await runAction('installer', { platform }, { refresh: false, progress: 'Отправляем установщик EX WG 1.0…', notifySuccess: false });
+    if (r) showDeliveryResult(r.message || 'Установщик EX WG 1.0 отправлен в чат с ботом.');
+  }
+
+  function openGuideSheet(initialOs = null) {
+    sendEvent('guide', true);
+    let currentOs = initialOs || detectOs();
+    const installers = state?.installers || {};
+    const multiDevice = (state?.subscription?.device_limit || 1) > 1;
+    const whereButtons = multiDevice ? 'во вкладке <b>«Устройства»</b>' : 'на <b>Главной</b> или во вкладке <b>«Устройства»</b>';
+
+    const osData = {
+      ios: {
+        label: 'iPhone',
+        installer: null,
+        steps: [
+          'Установите бесплатное приложение <b>AmneziaWG</b> из App Store по кнопке ниже.',
+          `Нажмите <b>«Файлы в бот»</b> (${whereButtons}) — бот пришлёт архив <code>neXusRay.zip</code>.`,
+          'Нажмите на файл → <b>«Поделиться»</b> → <b>AmneziaWG</b> → <b>«Разрешить»</b>. Включайте по одному тумблеру.',
+        ],
+        links: [{ label: 'App Store · AmneziaWG', url: 'https://apps.apple.com/app/amneziawg/id6478942365' }],
+      },
+      android: {
+        label: 'Android',
+        installer: installers.android !== false ? { platform: 'android', title: 'EX WG 1.0 для Android', sub: 'Рекомендуемый APK · придёт прямо в чат' } : null,
+        steps: [
+          'Установите <b>EX WG 1.0</b> (кнопка выше) или <b>AmneziaWG</b> из Google Play / GitHub APK.',
+          `Нажмите <b>«Файлы в бот»</b> (${whereButtons}) и сохраните <code>neXusRay.zip</code> (или отсканируйте «Большой QR»).`,
+          'В приложении нажмите <b>«+»</b> → <b>«Импорт из файла»</b> и выберите скачанный архив. Включайте по одному тумблеру.',
+        ],
+        links: [
+          { label: 'Google Play', url: 'https://play.google.com/store/apps/details?id=org.amnezia.awg' },
+          { label: 'GitHub APK', url: 'https://github.com/amnezia-vpn/amneziawg-android/releases/latest' },
+        ],
+      },
+      windows: {
+        label: 'Windows',
+        installer: installers.windows !== false ? { platform: 'windows', title: 'EX WG 1.0 для Windows', sub: 'Установщик .exe · придёт прямо в чат' } : null,
+        steps: [
+          'Установите <b>EX WG 1.0</b> (кнопка выше) или официальный клиент <b>AmneziaWG</b> для Windows.',
+          `Нажмите <b>«Файлы в бот»</b> (${whereButtons}) и сохраните архив <code>neXusRay.zip</code> на компьютер.`,
+          'В программе нажмите <b>«Импорт туннелей из файла»</b> и выберите архив. Включайте один маршрут.',
+        ],
+        links: [{ label: 'GitHub · AmneziaWG', url: 'https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest' }],
+      },
+      macos: {
+        label: 'macOS',
+        installer: null,
+        steps: [
+          'Установите официальное приложение <b>AmneziaWG</b> из App Store по кнопке ниже.',
+          `Нажмите <b>«Файлы в бот»</b> (${whereButtons}) и сохраните <code>neXusRay.zip</code> в «Загрузки».`,
+          'В AmneziaWG выберите <b>«Импорт из файла»</b> → укажите архив → включите один из 3 маршрутов.',
+        ],
+        links: [{ label: 'App Store · macOS', url: 'https://apps.apple.com/app/amneziawg/id6478942365' }],
+      },
+    };
+
+    const renderGuideBody = () => {
+      const cfg = osData[currentOs] || osData.ios;
+      $('sheet-content').innerHTML = `
+        <h2 id="sheet-title">Инструкция подключения</h2>
+        <div class="os-tabs" role="tablist" aria-label="Выбор устройства">
+          ${Object.entries(osData).map(([k, v]) => `<button type="button" role="tab" aria-selected="${k === currentOs}" class="${k === currentOs ? 'active' : ''}" data-os-tab="${k}">${v.label}</button>`).join('')}
+        </div>
+        ${cfg.installer ? `<div class="installer-banner"><div><strong>${esc(cfg.installer.title)}</strong><small>${esc(cfg.installer.sub)}</small></div><button type="button" data-send-installer="${cfg.installer.platform}">Получить</button></div>` : ''}
+        <div class="guide-steps">
+          ${cfg.steps.map((s, i) => `<div class="guide-step"><b>${i + 1}</b><div>${s}</div></div>`).join('')}
+        </div>
+        <div class="app-links" style="${cfg.links.length === 1 ? 'grid-template-columns:1fr' : ''}">
+          ${cfg.links.map((l) => `<button type="button" data-app-url="${esc(l.url)}">${esc(l.label)}</button>`).join('')}
+        </div>
+        <div class="sheet-actions">
+          <button type="button" id="guide-trouble">Не работает?</button>
+          <button type="button" class="primary" id="guide-close">Понятно</button>
+        </div>`;
+
+      $('sheet-content').querySelectorAll('[data-os-tab]').forEach((b) => {
+        b.onclick = () => {
+          currentOs = b.dataset.osTab;
+          hapticSelect();
+          renderGuideBody();
+        };
+      });
+      $('sheet-content').querySelectorAll('[data-app-url]').forEach((b) => {
+        b.onclick = () => openExternal(b.dataset.appUrl);
+      });
+      $('sheet-content').querySelectorAll('[data-send-installer]').forEach((b) => {
+        b.onclick = () => requestInstaller(b.dataset.sendInstaller);
+      });
+      $('guide-trouble').onclick = openTroubleshootSheet;
+      $('guide-close').onclick = closeSheet;
+    };
+
+    resetSheetTransform();
+    renderGuideBody();
+    showSheetModal($('guide-close'));
+  }
+
+  function openReferralSheet() {
+    const ref = state?.referral || {};
+    const link = ref.link || `https://t.me/nexus_rayt_bot?start=${state?.viewer?.id || ''}`;
+    const shareText = ref.share_text || 'Дарю 24 часа быстрого защищённого доступа neXus Ray! Подключайся по ссылке:';
+    resetSheetTransform();
+    $('sheet-content').innerHTML = `
+      <h2 id="sheet-title">Пригласить друга</h2>
+      <p>Друг получит <b>24 часа бесплатно</b>, а после его первой оплаты вам автоматически начислятся <b>+7 дней</b>.</p>
+      <div class="referral-stats-grid">
+        <div><b>${ref.invited ?? 0}</b><small>Приглашено</small></div>
+        <div><b>${ref.rewarded ?? 0}</b><small>Оплатили</small></div>
+        <div><b>+${ref.bonus_days ?? 0}\u00A0дн.</b><small>Бонус</small></div>
+      </div>
+      <div class="referral-link-box">
+        <code>${esc(link)}</code>
+        <button type="button" id="ref-copy-btn">Копировать</button>
+      </div>
+      <div class="sheet-actions">
+        <button type="button" id="ref-close">Закрыть</button>
+        <button type="button" class="primary" id="ref-share-btn">Подарить 24\u00A0ч</button>
+      </div>`;
+    $('ref-copy-btn').onclick = () => {
+      sendEvent('referral_share', true);
+      copyText(link, 'Реферальная ссылка скопирована');
+    };
+    $('ref-share-btn').onclick = () => {
+      sendEvent('referral_share', true);
+      shareTelegramLink(link, shareText);
+    };
+    $('ref-close').onclick = closeSheet;
+    showSheetModal($('ref-share-btn'));
+  }
+
+  function openFreezeInfoSheet() {
+    const sub = state?.subscription || {};
+    if (state?.access_mode === 'family_member') {
+      openSheet('Семейный доступ', `Вы пользуетесь общей подпиской владельца ${state.family_access?.owner_name || 'Семья'}. Заморозкой управляет владелец.`, [
+        { id: 'ok', label: 'Понятно', class: 'primary', run: closeSheet },
+      ]);
+      return;
+    }
+    const resetText = sub.freeze_cycle_reset_at ? ` Банк обновляется до 30 дней ${fmtDate(sub.freeze_cycle_reset_at)}.` : ' Лимит: до 30 дней раз в 180 дней.';
+    openSheet(
+      'Банк заморозки',
+      `Осталось ${fmtFreezeBank(sub)} паузы.${resetText} Во время заморозки дни не списываются, а доступ приостанавливается.`,
+      [
+        { id: 'close', label: 'Закрыть', run: closeSheet },
+        ...(sub.status === 'active' || sub.status === 'frozen'
+          ? [{ id: 'go', label: sub.status === 'frozen' ? 'Разморозить' : 'Заморозить', class: 'primary', run: () => promptFreeze(sub.status === 'frozen' ? 'unfreeze' : 'freeze') }]
+          : []),
+      ]
+    );
+  }
+
+  function openPromoSheet() {
+    openSheet(
+      'Ввести промокод',
+      'Промокод может добавить дни к подписке или активировать скидку на следующий платёж.',
+      [
+        { id: 'cancel', label: 'Отмена', run: closeSheet },
+        {
+          id: 'apply',
+          label: 'Применить',
+          class: 'primary',
+          run: async (val) => {
+            const code = String(val || '').trim();
+            if (!code) {
+              const errEl = $('sheet-inline-error');
+              if (errEl) { errEl.textContent = 'Введите промокод'; errEl.hidden = false; }
+              return;
+            }
+            await runAction('promo', { code }, { progress: 'Проверяем промокод…', keepSheetOpen: true });
+          },
+        },
+      ],
+      true,
+      '',
+      'Промокод',
+      'Например, WELCOME20'
+    );
+  }
+
+  async function activateTrial() {
+    const r = await runAction('trial', {}, { progress: 'Активируем 24 часа бесплатно…', notifySuccess: false });
+    if (r) {
+      notify(r.message || 'Пробный доступ на 24 часа активирован!');
+      openGuideSheet();
+    }
+  }
+
+  async function openQrModal(slot = 1, ownerId = 0, freshNotice = '') {
+    const data = await runAction('qr', { slot, owner_id: ownerId || undefined }, { refresh: false, progress: 'Готовим большой QR-код…', notifySuccess: false });
     if (!data || !data.items?.length) return;
     let idx = 0;
     const items = data.items;
@@ -989,46 +1841,49 @@
     const qrTabLabel = (it, i) => {
       if (it.role === 'primary') return 'Основной';
       if (it.role === 'reserve') return 'Резерв';
-      if (it.role === 'edge') return 'Edge';
+      if (it.role === 'edge') return 'Доп.';
       return it.title || `Маршрут ${i + 1}`;
     };
 
     resetSheetTransform();
     $('sheet-content').innerHTML = `
-      <h2 id="sheet-title">${esc(data.device_name || `Слот ${slot}`)}</h2>
+      <h2 id="sheet-title">${esc(data.device_name || `Место ${slot}`)}</h2>
       ${freshNotice
         ? `<div class="qr-fresh-banner">✓ ${esc(freshNotice)}</div>`
-        : `<p>${multi ? 'Переключайте маршруты свайпом или вкладками.' : 'Отсканируйте QR-код с другого устройства или отправьте файлы в бот.'}</p>`}
+        : `<p>${multi ? 'Переключайте маршруты свайпом или вкладками.' : 'Отсканируйте QR-код с другого экрана или отправьте файлы в бот.'}</p>`}
       <div class="qr-viewer" id="qr-swipe-area">
-        <div class="qr-tabs ${multi?'':'single'}" id="qr-tabs" role="tablist" aria-label="Маршрут" style="--qr-idx:0;--qr-count:${items.length}">
+        <div class="qr-tabs ${multi ? '' : 'single'}" id="qr-tabs" role="tablist" aria-label="Маршрут" style="--qr-idx:0;--qr-count:${items.length}">
           <div class="qr-tab-pill" aria-hidden="true"></div>
-          ${items.map((it, i) => `<button type="button" role="tab" aria-selected="${i===0}" data-qr-tab="${i}" class="${i===0?'active':''}">${esc(qrTabLabel(it, i))}</button>`).join('')}
+          ${items.map((it, i) => `<button type="button" role="tab" aria-selected="${i === 0}" data-qr-tab="${i}" class="${i === 0 ? 'active' : ''}">${esc(qrTabLabel(it, i))}</button>`).join('')}
         </div>
         <div class="qr-carousel-viewport" id="qr-viewport">
           <div class="qr-carousel-track" id="qr-track">
             ${items.map((cur, i) => `
-              <div class="qr-slide" ${i===0?'':'inert aria-hidden="true"'}>
+              <div class="qr-slide" ${i === 0 ? '' : 'inert aria-hidden="true"'}>
                 <div class="qr-box">
                   <img src="${cur.qr_data_url}" alt="QR-код ${esc(cur.title)}: ${esc(cur.subtitle)}">
                   <div class="qr-route-bar">
-                    ${multi ? `<button type="button" class="qr-arrow" data-qr-dir="-1" aria-label="Предыдущий маршрут" ${i===0?'disabled':''}>‹</button>` : '<span></span>'}
+                    ${multi ? `<button type="button" class="qr-arrow" data-qr-dir="-1" aria-label="Предыдущий маршрут" ${i === 0 ? 'disabled' : ''}>‹</button>` : '<span></span>'}
                     <div class="qr-route-copy">
                       <div class="qr-route-label">${esc(cur.title)}</div>
                       <div class="qr-route-sub">${esc(cur.subtitle)}</div>
                     </div>
-                    ${multi ? `<button type="button" class="qr-arrow" data-qr-dir="1" aria-label="Следующий маршрут" ${i===items.length-1?'disabled':''}>›</button>` : '<span></span>'}
+                    ${multi ? `<button type="button" class="qr-arrow" data-qr-dir="1" aria-label="Следующий маршрут" ${i === items.length - 1 ? 'disabled' : ''}>›</button>` : '<span></span>'}
                   </div>
                 </div>
               </div>
             `).join('')}
           </div>
         </div>
-        ${multi ? `<div class="qr-dots" id="qr-dots" aria-hidden="true">${items.map((_, i) => `<i class="${i===0?'active':''}"></i>`).join('')}</div>` : ''}
+        ${multi ? `<div class="qr-dots" id="qr-dots" aria-hidden="true">${items.map((_, i) => `<i class="${i === 0 ? 'active' : ''}"></i>`).join('')}</div>` : ''}
         <div class="qr-hint">Приложение <b>EX WG</b> или <b>AmneziaWG</b> → <b>«+»</b> → <b>Сканировать QR-код</b></div>
       </div>
       <div class="sheet-actions">
-        <button type="button" id="qr-send-files">Файлы .conf в бот</button>
+        <button type="button" id="qr-send-files">Архив в бот</button>
         <button type="button" class="primary" id="qr-done">Готово</button>
+      </div>
+      <div class="qr-separate-row">
+        <button type="button" class="qr-separate-btn" id="qr-send-separate">Отправить файлы .conf по отдельности</button>
       </div>`;
 
     const tabsEl = $('qr-tabs');
@@ -1058,53 +1913,24 @@
           else slide.setAttribute('aria-hidden', 'true');
         });
       }
-      if (dotsEl) {
-        dotsEl.querySelectorAll('i').forEach((d, i) => d.classList.toggle('active', i === idx));
-      }
+      if (dotsEl) dotsEl.querySelectorAll('i').forEach((d, i) => d.classList.toggle('active', i === idx));
     };
 
-    $('sheet-content').querySelectorAll('[data-qr-tab]').forEach((b) => {
-      b.onclick = () => syncActiveSlide(Number(b.dataset.qrTab), true);
-    });
-    $('sheet-content').querySelectorAll('[data-qr-dir]').forEach((b) => {
-      b.onclick = () => {
-        const dir = Number(b.dataset.qrDir);
-        syncActiveSlide(idx + dir, true);
-      };
-    });
+    $('sheet-content').querySelectorAll('[data-qr-tab]').forEach((b) => { b.onclick = () => syncActiveSlide(Number(b.dataset.qrTab), true); });
+    $('sheet-content').querySelectorAll('[data-qr-dir]').forEach((b) => { b.onclick = () => syncActiveSlide(idx + Number(b.dataset.qrDir), true); });
 
     if (viewportEl && trackEl && multi) {
-      let startX = 0;
-      let startY = 0;
-      let lastX = 0;
-      let lastTime = 0;
-      let instantVx = 0;
-      let currentDx = 0;
-      let swiping = false;
-      let lockedAxis = '';
-
+      let startX = 0, startY = 0, lastX = 0, lastTime = 0, instantVx = 0, currentDx = 0, swiping = false, lockedAxis = '';
       viewportEl.addEventListener('touchstart', (e) => {
         if (e.touches.length !== 1) return;
-        startX = e.touches[0].clientX;
-        startY = e.touches[0].clientY;
-        lastX = startX;
-        lastTime = performance.now();
-        instantVx = 0;
-        currentDx = 0;
-        swiping = true;
-        lockedAxis = '';
+        startX = e.touches[0].clientX; startY = e.touches[0].clientY; lastX = startX; lastTime = performance.now();
+        instantVx = 0; currentDx = 0; swiping = true; lockedAxis = '';
       }, { passive: true });
-
       viewportEl.addEventListener('touchmove', (e) => {
         if (!swiping || e.touches.length !== 1) return;
-        const now = performance.now();
-        const dt = Math.max(1, now - lastTime);
-        const clientX = e.touches[0].clientX;
-        instantVx = (clientX - lastX) / dt;
-        lastX = clientX;
-        lastTime = now;
-        const dx = clientX - startX;
-        const dy = e.touches[0].clientY - startY;
+        const now = performance.now(), dt = Math.max(1, now - lastTime), clientX = e.touches[0].clientX;
+        instantVx = (clientX - lastX) / dt; lastX = clientX; lastTime = now;
+        const dx = clientX - startX, dy = e.touches[0].clientY - startY;
         if (!lockedAxis) {
           if (Math.abs(dx) < 7 && Math.abs(dy) < 7) return;
           lockedAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
@@ -1115,7 +1941,6 @@
         currentDx = atEdge ? dx * 0.34 : dx;
         trackEl.style.transform = `translate3d(calc(${-idx * 100}% + ${currentDx}px), 0, 0)`;
       }, { passive: true });
-
       const finishSwipe = () => {
         if (!swiping) return;
         swiping = false;
@@ -1126,203 +1951,321 @@
         else if (instantVx >= -0.05 && (currentDx > width * 0.18 || instantVx > 0.35)) target = Math.max(0, idx - 1);
         syncActiveSlide(target, true);
       };
-
       viewportEl.addEventListener('touchend', finishSwipe);
       viewportEl.addEventListener('touchcancel', finishSwipe);
     }
 
-    $('qr-done').onclick = closeSheet;
-    $('qr-send-files').onclick = async () => {
+    const sendFiles = async (separate) => {
       const act = ownerId ? 'family-get' : 'get';
-      const r = await runAction('devices', {action:act, slot, owner_id:ownerId||undefined}, {progress:'Отправляем .conf файлы в чат…', notifySuccess:false});
+      const r = await runAction('devices', { action: act, slot, owner_id: ownerId || undefined, separate_files: separate || undefined }, { progress: separate ? 'Отправляем отдельные .conf…' : 'Отправляем архив в чат…', notifySuccess: false });
       if (r) showDeliveryResult(r.message);
     };
 
+    $('qr-done').onclick = closeSheet;
+    $('qr-send-files').onclick = () => sendFiles(false);
+    $('qr-send-separate').onclick = () => sendFiles(true);
     showSheetModal($('qr-done'));
   }
 
   function openQuickQr() {
+    if (state?.subscription?.status !== 'active') {
+      notify('Подписка не активна.');
+      return;
+    }
     if (state.access_mode === 'family_member') {
       const first = state.devices?.[0];
-      if (first && state.devices.length === 1) {
-        openQrModal(first.slot, first.owner_id);
-        return;
-      }
-      go('devices');
-      notify('Выберите свой семейный слот для показа QR.');
-      return;
+      if (first && state.devices.length === 1) { openQrModal(first.slot, first.owner_id); return; }
+      go('devices'); notify('Выберите своё семейное место.'); return;
     }
     const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
-    if (own.length === 1) {
-      openQrModal(own[0].slot, 0);
-      return;
-    }
-    go('devices');
-    notify('Выберите устройство для показа большого QR.');
+    if (own.length === 1) { openQrModal(own[0].slot, 0); return; }
+    go('devices'); notify('Выберите устройство для показа большого QR.');
   }
 
-  function openGuideSheet() {
-    resetSheetTransform();
-    $('sheet-content').innerHTML = `
-      <h2 id="sheet-title">Инструкция подключения</h2>
-      <p>Установите приложение <b>EX WG</b> (установщик доступен в боте для Android и Windows) или официальный <b>AmneziaWG</b>:</p>
-      <div class="guide-steps">
-        <div class="guide-step"><b>1</b><div>Скачайте приложение <b>AmneziaWG</b> по кнопкам ниже или получите <b>EX WG 1.0</b> в разделе инструкций бота.</div></div>
-        <div class="guide-step"><b>2</b><div>Нажмите <b>«Большой QR»</b> (для сканирования с другого экрана) или <b>«Файлы в бот»</b> (придёт архив <code>neXusRay.zip</code> и отдельные <code>.conf</code>).</div></div>
-        <div class="guide-step"><b>3</b><div>Добавьте все 3 маршрута (основной, резерв и Edge) — включайте по одному тумблеру, а при просадке сети просто переключите страну.</div></div>
-      </div>
-      <div class="app-links">
-        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">iPhone / iPad</button>
-        <button type="button" data-app-url="https://play.google.com/store/apps/details?id=org.amnezia.awg">Android</button>
-        <button type="button" data-app-url="https://github.com/amnezia-vpn/amneziawg-windows-client/releases/latest">Windows</button>
-        <button type="button" data-app-url="https://apps.apple.com/app/amneziawg/id6478942365">macOS</button>
-      </div>
-      <div class="sheet-actions" style="grid-template-columns:1fr">
-        <button type="button" class="primary" id="guide-close">Понятно</button>
-      </div>`;
-    $('sheet-content').querySelectorAll('[data-app-url]').forEach((b) => b.onclick = () => openExternal(b.dataset.appUrl));
-    $('guide-close').onclick = closeSheet;
-    showSheetModal($('guide-close'));
-  }
-
-  async function startPurchase(months) {
-    const current = state.subscription.device_limit, familyMember = state.access_mode === 'family_member', active = !familyMember && ['active','frozen'].includes(state.subscription.status);
+  async function startPurchase(months, confirmDowngrade = false) {
+    const sub = state.subscription || {};
+    const current = sub.device_limit || 1;
+    const familyMember = state.access_mode === 'family_member';
+    const isTrial = !familyMember && isTrialSubscription(sub);
+    const active = !familyMember && !isTrial && ['active', 'frozen'].includes(sub.status);
     if (active && selectedDevices !== current) {
       notify('Сначала примените изменение лимита.');
       return;
     }
-    const item = state.plans.find((p)=>p.months===months).prices.find((p)=>p.devices===selectedDevices);
+    const plan = state.plans?.find((p) => p.months === months);
+    const item = plan?.prices?.find((p) => p.devices === selectedDevices);
+    if (!item) return;
     const price = item.amount, basePrice = item.base_amount || item.amount;
-    const priceLine = price < basePrice ? `Стоимость со скидкой (${item.discount_label||'акция'}): ${price} ₽ вместо ${basePrice} ₽.` : `К оплате: ${price} ₽.`;
-    const familyWarning = familyMember ? ` Платёж продлит общую подписку владельца ${state.family_access.owner_name}; дни получат все участники и останутся у семьи даже после вашего выхода.` : '';
-    openSheet(
-      familyMember ? 'Продлить всю семью' : 'Купить подписку',
-      `${monthWord(months)}, до ${selectedDevices} устройств. ${priceLine}${familyWarning}`,
-      [
-        {id:'cancel', label:'Отмена', run:closeSheet},
-        {id:'pay', label:`Оплатить ${price} ₽`, class:'primary', run:async()=>{
-          const r = await runAction('payments', {months, devices:selectedDevices}, {refresh:false, progress:'Создаём безопасный счёт…'});
-          if (r) {
-            pendingPayment = r;
-            $('pending-payment').hidden = false;
-            $('pending-amount').textContent = `${r.amount}\u00A0₽`;
-            openExternal(r.confirmation_url);
-          }
-        }},
-      ]
-    );
+    const priceLine = price < basePrice
+      ? `Стоимость со скидкой (${item.discount_label || 'акция'}): ${price}\u00A0₽ вместо ${basePrice}\u00A0₽.`
+      : `К оплате: ${price}\u00A0₽.`;
+    const familyWarning = familyMember
+      ? ` Платёж продлит общую подписку владельца ${state.family_access?.owner_name || 'Семья'}; дни получат все участники и останутся у семьи даже после вашего выхода.`
+      : '';
+    const downgradeWarning = confirmDowngrade
+      ? ' Внимание: личные устройства сверх выбранного лимита будут отключены после оплаты.'
+      : '';
+
+    const runCheckout = async (method) => {
+      const r = await runAction(
+        'payments',
+        { months, devices: selectedDevices, method, confirm_downgrade: confirmDowngrade || undefined },
+        { refresh: false, progress: method === 'sbp' ? 'Открываем оплату по СБП…' : 'Создаём безопасный счёт…', notifySuccess: false }
+      );
+      if (r) {
+        savePendingPayment(r);
+        openExternal(r.confirmation_url);
+      }
+    };
+
+    resetSheetTransform();
+    $('sheet-content').innerHTML = `
+      <h2 id="sheet-title">${familyMember ? 'Продлить всю семью' : 'Оплата подписки'}</h2>
+      <p>${esc(nbsp(`${monthWord(months)}, до ${deviceGenWord(selectedDevices)}. ${priceLine}${familyWarning}${downgradeWarning}`))}</p>
+      <div class="sheet-pay-stack">
+        <button type="button" class="sbp-primary" id="pay-sbp">Оплатить по СБП · ${price}\u00A0₽</button>
+        <button type="button" id="pay-card">Карта / SberPay · ${price}\u00A0₽</button>
+        <button type="button" class="cancel-link" id="pay-cancel">Отмена</button>
+      </div>`;
+    $('pay-sbp').onclick = () => runCheckout('sbp');
+    $('pay-card').onclick = () => runCheckout('card');
+    $('pay-cancel').onclick = closeSheet;
+    showSheetModal($('pay-sbp'));
   }
 
   function confirmPlanChange() {
     const current = state.subscription.device_limit;
     openSheet(
       'Изменить лимит?',
-      `Текущий тариф: ${current} устройств. Новый тариф: ${selectedDevices}. Это не покупка — деньги не списываются, изменится остаток дней.`,
+      `Текущий тариф: ${deviceWord(current)}. Новый тариф: ${deviceWord(selectedDevices)}. Это не покупка — деньги не списываются, изменится остаток дней.`,
       [
-        {id:'cancel', label:'Отмена', run:closeSheet},
-        {id:'go', label:'Изменить лимит', class:'primary', run:()=>runAction('plan', {devices:selectedDevices, operation_id:operationId(), state_version:state.state_version}, {progress:'Меняем лимит…'})},
+        { id: 'cancel', label: 'Отмена', run: closeSheet },
+        { id: 'go', label: 'Изменить лимит', class: 'primary', run: () => runAction('plan', { devices: selectedDevices, operation_id: operationId(), state_version: state.state_version }, { progress: 'Меняем лимит…' }) },
       ]
     );
   }
 
   function confirmRegenerate() {
+    if (state?.subscription?.status !== 'active') {
+      notify('Сброс ключа доступен только для активной подписки.');
+      return;
+    }
     if (state.access_mode === 'family_member') {
       const first = state.devices?.[0];
-      if (first && state.devices.length === 1) {
-        devicePrompt('family-regenerate', first.slot, first.owner_id);
-        return;
-      }
-      go('devices');
-      notify('Выберите свой семейный слот для перевыпуска.');
-      return;
+      if (first && state.devices.length === 1) { devicePrompt('family-regenerate', first.slot, first.owner_id); return; }
+      go('devices'); notify('Выберите своё семейное место для перевыпуска.'); return;
     }
     const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal');
-    if (own.length === 1) {
-      devicePrompt('regenerate', own[0].slot, 0);
-      return;
-    }
-    go('devices');
-    notify('Выберите устройство для перевыпуска.');
+    if (own.length === 1) { devicePrompt('regenerate', own[0].slot, 0); return; }
+    go('devices'); notify('Выберите устройство для перевыпуска.');
   }
 
-  function devicePrompt(action, slot, ownerId=0) {
+  function promptFreeze(action) {
+    const sub = state?.subscription || {};
+    const bankHours = Number.isFinite(sub.freeze_bank_hours) ? sub.freeze_bank_hours : (sub.freeze_bank_days || 0) * 24;
+    if (action === 'freeze' && bankHours <= 0) {
+      notify('Банк заморозки исчерпан.');
+      return;
+    }
+    const hasFamily = (state.family?.members || 0) > 0;
+    const freezeText = `Остаток банка паузы: ${fmtFreezeBank(sub)} (лимит 30 дн. / 180 дн., авто-разморозка по окончании). Дни перестанут расходоваться, а доступ временно приостановится.${hasFamily ? ' Семейные участники также будут временно приостановлены.' : ''}`;
+    openSheet(
+      action === 'freeze' ? 'Заморозить подписку?' : 'Разморозить подписку?',
+      action === 'freeze' ? freezeText : 'Доступ снова включится, а сохранённые дни продолжат расходоваться.',
+      [
+        { id: 'cancel', label: 'Отмена', run: closeSheet },
+        { id: 'go', label: action === 'freeze' ? 'Заморозить' : 'Разморозить', class: 'primary', run: () => runAction(action, { state_version: state.state_version }, { progress: action === 'freeze' ? 'Замораживаем подписку…' : 'Размораживаем подписку…' }) },
+      ]
+    );
+  }
+
+  function devicePrompt(action, slot, ownerId = 0) {
     if (action === 'qr' || action === 'family-qr') {
       openQrModal(slot, action === 'family-qr' ? ownerId : 0);
       return;
     }
+    if (action === 'invite-family') {
+      openSheet(
+        'Пригласить в семью',
+        `Мы создадим одноразовую ссылку для места ${slot}. Участник получит собственный ключ, а ваш тариф останется общим.`,
+        [
+          { id: 'cancel', label: 'Отмена', run: closeSheet },
+          {
+            id: 'go',
+            label: 'Создать ссылку',
+            class: 'primary',
+            run: async () => {
+              const r = await runAction('devices', { action: 'invite-family', slot }, { progress: 'Создаём приглашение…', notifySuccess: false });
+              if (r?.invite_url) {
+                resetSheetTransform();
+                $('sheet-content').innerHTML = `
+                  <h2 id="sheet-title">Приглашение готово</h2>
+                  <p>Отправьте эту ссылку близкому человеку — после перехода бот сразу выдаст ему личный ключ.</p>
+                  <div class="referral-link-box">
+                    <code>${esc(r.invite_url)}</code>
+                    <button type="button" id="inv-copy">Копировать</button>
+                  </div>
+                  <div class="sheet-actions">
+                    <button type="button" id="inv-close">Закрыть</button>
+                    <button type="button" class="primary" id="inv-share">Отправить в Telegram</button>
+                  </div>`;
+                $('inv-copy').onclick = () => copyText(r.invite_url, 'Ссылка приглашения скопирована');
+                $('inv-share').onclick = () => shareTelegramLink(r.invite_url, 'Приглашаю тебя в семейный доступ neXus Ray! Нажми на ссылку для подключения:');
+                $('inv-close').onclick = closeSheet;
+                showSheetModal($('inv-share'));
+              }
+            },
+          },
+        ]
+      );
+      return;
+    }
+
     const device = state.devices.find((item) => item.slot === slot);
-    if (['add','rename','family-rename'].includes(action)) {
+    if (['add', 'rename', 'family-rename'].includes(action)) {
       openSheet(
         action === 'add' ? 'Новое устройство' : 'Переименовать устройство',
         'Укажите короткое понятное название — например, «iPhone» или «Ноутбук».',
         [
-          {id:'cancel', label:'Отмена', run:closeSheet},
-          {id:'go', label:action === 'add' ? 'Создать' : 'Сохранить', class:'primary', run:async(name)=>{
-            const createsConfig = action === 'add';
-            const r = await runAction('devices', {action, slot, name, owner_id:ownerId||undefined}, {progress:createsConfig?'Создаём устройство и готовим QR…':'Сохраняем название…', notifySuccess:!createsConfig});
-            if (r && createsConfig) await openQrModal(slot, 0, 'Устройство создано · файлы .conf также отправлены в бот');
-          }},
+          { id: 'cancel', label: 'Отмена', run: closeSheet },
+          {
+            id: 'go',
+            label: action === 'add' ? 'Создать' : 'Сохранить',
+            class: 'primary',
+            run: async (rawName) => {
+              const name = String(rawName || '').trim();
+              if (!name) {
+                const errEl = $('sheet-inline-error');
+                if (errEl) { errEl.textContent = 'Введите название устройства'; errEl.hidden = false; }
+                return;
+              }
+              const createsConfig = action === 'add';
+              const r = await runAction('devices', { action, slot, name, owner_id: ownerId || undefined }, { progress: createsConfig ? 'Создаём устройство и готовим QR…' : 'Сохраняем название…', notifySuccess: !createsConfig, keepSheetOpen: true });
+              if (r && createsConfig) await openQrModal(slot, 0, 'Устройство создано · архив также отправлен в бот');
+            },
+          },
         ],
         true,
         action === 'add' ? '' : (device?.name || '')
       );
       return;
     }
+
     const labels = {
-      get: ['Отправить файлы в бот', `Файлы .conf и QR для «${device?.name||`Слот ${slot}`}» придут в чат с ботом.`, 'Отправить в бот'],
-      regenerate: ['Перевыпустить ключ?', `Старый ключ устройства «${device?.name||`Слот ${slot}`}» перестанет работать. Новый QR сразу откроется здесь, а файлы .conf придут в бот.`, 'Перевыпустить'],
-      delete: ['Удалить устройство?', `Ключ «${device?.name||`Слот ${slot}`}» перестанет работать на всех серверах.`, 'Удалить'],
-      ['revoke-family']: ['Отозвать семейный доступ?', `Участник «${device?.member_name||device?.name||`Слот ${slot}`}» потеряет доступ на всех серверах.`, 'Отозвать'],
-      ['cancel-invite']: ['Отменить приглашение?', 'Ссылка перестанет действовать, а слот снова станет свободным.', 'Отменить приглашение'],
-      ['family-get']: ['Получить семейные настройки', `Файлы .conf и QR для «${device?.name||`Слот ${slot}`}» придут в ваш чат с ботом.`, 'Отправить в бот'],
-      ['family-regenerate']: ['Перевыпустить семейный ключ?', `Только ваш ключ «${device?.name||`Слот ${slot}`}» перестанет работать. Новый QR сразу откроется здесь, а файлы придут в бот.`, 'Перевыпустить'],
+      get: ['Отправить файлы в бот', `Архив neXusRay.zip и QR для «${device?.name || `Место ${slot}`}» придут в чат с ботом.`, 'Отправить архив'],
+      regenerate: ['Перевыпустить ключ?', `Новый QR сразу откроется здесь, а архив придёт в бот. Старый ключ «${device?.name || `Место ${slot}`}» продолжит работать ещё 30 минут, чтобы вы спокойно успели переключиться.`, 'Перевыпустить'],
+      delete: ['Удалить устройство?', `Ключ «${device?.name || `Место ${slot}`}» перестанет работать на всех серверах.`, 'Удалить'],
+      ['revoke-family']: ['Отозвать семейный доступ?', `Место ${slot} освободится сразу, а у участника «${device?.member_name || device?.name || `Место ${slot}`}» останется 12 часов на переход на личный тариф без обрыва связи.`, 'Отозвать'],
+      ['cancel-invite']: ['Отменить приглашение?', 'Ссылка перестанет действовать, а место снова станет свободным.', 'Отменить приглашение'],
+      ['family-get']: ['Получить семейные настройки', `Архив neXusRay.zip и QR для «${device?.name || `Место ${slot}`}» придут в ваш чат с ботом.`, 'Отправить архив'],
+      ['family-regenerate']: ['Перевыпустить семейный ключ?', `Новый QR сразу откроется здесь, а файлы придут в бот. Прежний ключ продолжит работать ещё 30 минут.`, 'Перевыпустить'],
       ['family-leave']: ['Выйти из семьи?', 'Ваш ключ сразу перестанет работать, а уже оплаченные вами семейные дни останутся у общей подписки. После выхода личный тариф нужно купить отдельно.', 'Выйти из семьи'],
     };
     const [title, text, label] = labels[action];
-    openSheet(title, text, [
-      {id:'cancel', label:'Отмена', run:closeSheet},
-      {id:'go', label, class:['delete','regenerate','revoke-family','cancel-invite','family-regenerate','family-leave'].includes(action)?'danger':'primary', run:async()=>{
-        const sendsConfig = ['get','regenerate','family-get','family-regenerate'].includes(action);
-        const rotating = ['regenerate','family-regenerate'].includes(action);
-        const r = await runAction('devices', {
-          action,
-          slot,
-          owner_id: ownerId || undefined,
-          operation_id: rotating ? operationId() : undefined,
-          subject_id: action === 'revoke-family' ? device?.member_id : undefined,
-          invite_version: action === 'cancel-invite' ? device?.invite_version : undefined,
-          device_version: action === 'delete' ? device?.device_version : undefined,
-        }, {
-          progress: rotating ? 'Перевыпускаем ключ и готовим QR…' : sendsConfig ? 'Отправляем настройки в чат…' : 'Сохраняем изменения…',
-          notifySuccess: !sendsConfig,
-        });
-        if (r) {
-          if (rotating) await openQrModal(slot, action === 'family-regenerate' ? ownerId : 0, 'Ключ перевыпущен · новые файлы .conf также в чате бота');
-          else if (sendsConfig) showDeliveryResult(r.message);
-        }
-      }},
-    ]);
+    const isDanger = ['delete', 'regenerate', 'revoke-family', 'cancel-invite', 'family-regenerate', 'family-leave'].includes(action);
+    const isGet = action === 'get' || action === 'family-get';
+    const actions = [
+      { id: 'cancel', label: 'Отмена', run: closeSheet },
+      ...(isGet ? [{
+        id: 'sep',
+        label: 'По отдельности',
+        run: async () => {
+          const r = await runAction('devices', { action, slot, owner_id: ownerId || undefined, separate_files: true }, { progress: 'Отправляем отдельные .conf…', notifySuccess: false });
+          if (r) showDeliveryResult(r.message);
+        },
+      }] : []),
+      {
+        id: 'go',
+        label,
+        class: isDanger ? 'danger' : 'primary',
+        run: async () => {
+          const sendsConfig = ['get', 'regenerate', 'family-get', 'family-regenerate'].includes(action);
+          const rotating = ['regenerate', 'family-regenerate'].includes(action);
+          const r = await runAction('devices', {
+            action,
+            slot,
+            owner_id: ownerId || undefined,
+            operation_id: rotating ? operationId() : undefined,
+            subject_id: action === 'revoke-family' ? device?.member_id : undefined,
+            invite_version: action === 'cancel-invite' ? device?.invite_version : undefined,
+            device_version: action === 'delete' ? device?.device_version : undefined,
+          }, {
+            progress: rotating ? 'Перевыпускаем ключ и готовим QR…' : sendsConfig ? 'Отправляем настройки в чат…' : 'Сохраняем изменения…',
+            notifySuccess: !sendsConfig,
+          });
+          if (r) {
+            if (rotating) await openQrModal(slot, action === 'family-regenerate' ? ownerId : 0, 'Ключ обновлён · прежний работает ещё 30 мин');
+            else if (sendsConfig) showDeliveryResult(r.message);
+          }
+        },
+      },
+    ];
+    openSheet(title, text, actions);
   }
 
   async function sendGlobalConfig() {
+    if (state?.subscription?.status !== 'active') {
+      notify('Подписка не активна.');
+      return;
+    }
     const own = (state.devices || []).filter((d) => !d.kind || d.kind === 'personal' || d.kind === 'family_member');
     if (own.length === 1) {
       const d = own[0];
       const act = d.kind === 'family_member' ? 'family-get' : 'get';
-      const r = await runAction('devices', {action:act, slot:d.slot, owner_id:d.owner_id||undefined}, {progress:'Отправляем .conf файлы в чат…', notifySuccess:false});
+      const r = await runAction('devices', { action: act, slot: d.slot, owner_id: d.owner_id || undefined }, { progress: 'Отправляем архив в чат…', notifySuccess: false });
       if (r) showDeliveryResult(r.message);
       return;
     }
     go('devices');
-    notify(state.access_mode === 'family_member' ? 'Выберите свой семейный слот.' : 'Выберите нужное устройство.');
+    notify(state.access_mode === 'family_member' ? 'Выберите своё семейное место.' : 'Выберите нужное устройство.');
+  }
+
+  function showLockedScreen(kind, message = '') {
+    $('loading').hidden = true;
+    $('content').hidden = true;
+    $('nav').hidden = true;
+    $('locked').hidden = false;
+    const titleEl = $('locked-title');
+    const textEl = $('locked-text');
+    const actionsEl = $('locked-actions');
+    const retryBtn = $('locked-retry');
+    if (kind === 'forbidden') {
+      if (titleEl) titleEl.textContent = 'Доступ ограничен';
+      if (textEl) textEl.textContent = message || 'Вход в личный кабинет для этого аккаунта ограничен.';
+      if (actionsEl) actionsEl.hidden = false;
+      if (retryBtn) retryBtn.hidden = true;
+    } else if (kind === 'network') {
+      if (titleEl) titleEl.textContent = 'Нет связи с сервером';
+      if (textEl) textEl.textContent = message || 'Не удалось загрузить кабинет. Проверьте подключение и нажмите «Повторить», либо используйте меню в чате бота.';
+      if (actionsEl) actionsEl.hidden = false;
+      if (retryBtn) retryBtn.hidden = false;
+    } else {
+      if (titleEl) titleEl.textContent = 'Откройте кабинет из Telegram-бота';
+      if (textEl) textEl.textContent = 'Для защиты ключей и подписки приложение проверяет подпись Telegram при каждом входе.';
+      if (actionsEl) actionsEl.hidden = true;
+    }
   }
 
   async function load() {
+    if (loadingInFlight) return;
+    loadingInFlight = true;
     const refreshBtn = $('refresh');
     refreshBtn?.classList.add('is-spinning');
     try {
-      state = await api('me');
-      selectedDevices = selectedDevices || (state.access_mode === 'family_member' ? (state.family_access?.plan_limit || 7) : state.subscription.device_limit);
+      const nextState = await api('me');
+      const prevMode = lastAccessMode;
+      state = nextState;
+      lastAccessMode = state.access_mode;
+
+      // Reset selectedDevices cleanly when exiting family_member -> personal!
+      if (prevMode === 'family_member' && state.access_mode !== 'family_member') {
+        selectedDevices = state.subscription?.remembered_device_limit || state.subscription?.device_limit || 1;
+      } else if (!selectedDevices) {
+        selectedDevices = state.access_mode === 'family_member'
+          ? (state.family_access?.plan_limit || 7)
+          : (state.subscription?.remembered_device_limit || state.subscription?.device_limit || 1);
+      }
+
       $('loading').hidden = true;
       $('locked').hidden = true;
       $('content').hidden = false;
@@ -1330,40 +2273,116 @@
       render();
       requestAnimationFrame(() => renderTrafficChart());
     } catch (error) {
-      $('loading').hidden = true;
-      $('content').hidden = true;
-      $('nav').hidden = true;
-      $('locked').hidden = false;
+      if (state) {
+        // Keep existing UI alive on transient refresh errors!
+        notify(error.message || 'Не удалось обновить данные');
+      } else if (error?.status === 403) {
+        showLockedScreen('forbidden', error.message);
+      } else if (error?.status === 401 || error?.code === 'open_in_telegram') {
+        showLockedScreen('auth');
+      } else {
+        showLockedScreen('network', error.message);
+      }
     } finally {
+      loadingInFlight = false;
       setTimeout(() => refreshBtn?.classList.remove('is-spinning'), 320);
     }
   }
 
-  document.querySelectorAll('[data-view]').forEach((b) => b.onclick = () => go(b.dataset.view));
-  document.querySelectorAll('[data-go]').forEach((b) => b.onclick = () => go(b.dataset.go));
-  document.querySelectorAll('[data-action]').forEach((b) => b.onclick = () => {
-    const action = b.dataset.action;
-    if (action === 'qr') openQuickQr();
-    else if (action === 'guide') openGuideSheet();
-    else if (action === 'configs') sendGlobalConfig();
-    else if (action === 'regenerate') confirmRegenerate();
-    else if (action === 'freeze' || action === 'unfreeze') {
-      openSheet(
-        action === 'freeze' ? 'Заморозить подписку?' : 'Разморозить подписку?',
-        action === 'freeze' ? 'Дни перестанут расходоваться, а доступ временно приостановится.' : 'Доступ снова включится, а сохранённые дни продолжат расходоваться.',
-        [
-          {id:'cancel', label:'Отмена', run:closeSheet},
-          {id:'go', label:action === 'freeze' ? 'Заморозить' : 'Разморозить', class:'primary', run:()=>runAction(action, {}, {progress:action === 'freeze' ? 'Замораживаем подписку…' : 'Размораживаем подписку…'})},
-        ]
-      );
+  async function verifyPendingPayment(silent = false) {
+    if (!pendingPayment || checkingPayment) return;
+    checkingPayment = true;
+    try {
+      const r = silent
+        ? await api('payments/check', { method: 'POST', body: JSON.stringify({ payment_id: pendingPayment.payment_id }) })
+        : await runAction('payments/check', { payment_id: pendingPayment.payment_id }, { progress: 'Проверяем оплату…', refresh: false, notifySuccess: false });
+      if (!r) return;
+      if (r.status === 'applied') {
+        clearTimeout(confirmedPollTimer);
+        savePendingPayment(null);
+        notify(r.message || 'Оплата применена, доступ готов!');
+        await load();
+      } else if (r.status === 'confirmed') {
+        if (!silent) notify(r.message || 'Оплата подтверждена, начисляем дни…');
+        clearTimeout(confirmedPollTimer);
+        confirmedPollTimer = setTimeout(() => verifyPendingPayment(true), 2500);
+      } else if (r.status === 'canceled') {
+        savePendingPayment(null);
+        notify(r.cancel_reason ? `Платёж отменён: ${r.cancel_reason}` : (r.message || 'Платёж отменён.'));
+        await load();
+      } else if (r.status === 'manual_review') {
+        savePendingPayment(null);
+        notify(r.message || 'Оплата подтверждена и ожидает проверки.');
+        await load();
+      } else if (!silent) {
+        notify(r.message || 'Оплата пока не поступила.');
+      }
+    } catch (err) {
+      if (!silent) notify(err.message || 'Проверка временно недоступна');
+    } finally {
+      checkingPayment = false;
     }
+  }
+
+  // Static listeners
+  document.querySelectorAll('[data-view]').forEach((b) => { b.onclick = () => go(b.dataset.view); });
+  document.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => go(b.dataset.go); });
+  document.querySelectorAll('[data-action]').forEach((b) => {
+    b.onclick = () => {
+      const action = b.dataset.action;
+      if (action === 'qr') openQuickQr();
+      else if (action === 'guide') openGuideSheet();
+      else if (action === 'configs') sendGlobalConfig();
+      else if (action === 'regenerate') confirmRegenerate();
+      else if (action === 'routes') openRoutesSheet();
+      else if (action === 'troubleshoot') openTroubleshootSheet();
+      else if (action === 'promo') openPromoSheet();
+      else if (action === 'trial') activateTrial();
+      else if (action === 'freeze' || action === 'unfreeze') promptFreeze(action);
+    };
   });
 
   if ($('card-node-btn')) {
     $('card-node-btn').onclick = () => {
-      if (state?.cabinet_mode !== 'inactive') openQuickQr();
+      if (!$('card-node-btn').disabled) openRoutesSheet();
     };
   }
+
+  if ($('promo-apply-btn')) {
+    $('promo-apply-btn').onclick = async () => {
+      const input = $('promo-code-input');
+      const code = String(input?.value || '').trim();
+      if (!code) { notify('Введите промокод'); input?.focus(); return; }
+      const r = await runAction('promo', { code }, { progress: 'Применяем промокод…' });
+      if (r && input) input.value = '';
+    };
+  }
+  if ($('promo-code-input')) {
+    $('promo-code-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); $('promo-apply-btn')?.click(); }
+    });
+  }
+
+  if ($('autorenew-toggle')) {
+    $('autorenew-toggle').onclick = async () => {
+      const current = $('autorenew-toggle').getAttribute('aria-checked') === 'true';
+      hapticSelect();
+      await runAction('autorenew', { enabled: !current }, { progress: !current ? 'Включаем автопродление…' : 'Выключаем автопродление…' });
+    };
+  }
+
+  if ($('metric-freeze-btn')) $('metric-freeze-btn').onclick = openFreezeInfoSheet;
+  if ($('metric-referral-btn')) $('metric-referral-btn').onclick = openReferralSheet;
+  if ($('profile-referral-btn')) $('profile-referral-btn').onclick = openReferralSheet;
+  if ($('metric-family-btn')) {
+    $('metric-family-btn').onclick = () => {
+      if (state?.access_mode === 'family_member') openFreezeInfoSheet();
+      else go('devices');
+    };
+  }
+
+  if ($('locked-retry')) $('locked-retry').onclick = () => { $('locked').hidden = true; $('loading').hidden = false; load(); };
+  if ($('locked-support')) $('locked-support').onclick = () => { if (tg?.close) tg.close(); else openTgUrl('https://t.me/nexus_rayt_bot'); };
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && $('sheet')?.classList.contains('open')) {
@@ -1373,59 +2392,34 @@
   });
 
   initSheetDrag();
-  window.addEventListener('resize', () => {
-    if (state) renderTrafficChart();
-  });
+  initVisualViewport();
+  const scheduleChartRender = () => {
+    clearTimeout(chartResizeTimer);
+    chartResizeTimer = setTimeout(() => { if (state) renderTrafficChart(); }, 90);
+  };
+  window.addEventListener('resize', scheduleChartRender);
+  tg?.onEvent?.('viewportChanged', scheduleChartRender);
+
   $('refresh').onclick = () => { haptic('light'); load(); };
   $('sheet-close').onclick = closeSheet;
   $('backdrop').onclick = closeSheet;
-  $('support-link').onclick = () => {
-    if (tg?.openTelegramLink) tg.openTelegramLink(state.support_url);
-    else window.open(state.support_url, '_blank');
-  };
+  $('support-link').onclick = openSupport;
+
   const OFFER_URL = 'https://telegra.ph/Publichnaya-oferta-Polzovatelskoe-soglashenie-02-22';
   $('offer-link').onclick = () => openExternal(OFFER_URL);
   if ($('inline-offer-link')) {
-    $('inline-offer-link').onclick = (e) => {
-      e.preventDefault();
-      openExternal(OFFER_URL);
-    };
+    $('inline-offer-link').onclick = (e) => { e.preventDefault(); openExternal(OFFER_URL); };
   }
   if ($('open-payment')) {
-    $('open-payment').onclick = () => {
-      if (pendingPayment?.confirmation_url) openExternal(pendingPayment.confirmation_url);
-    };
+    $('open-payment').onclick = () => { if (pendingPayment?.confirmation_url) openExternal(pendingPayment.confirmation_url); };
   }
-  $('check-payment').onclick = async () => {
-    if (!pendingPayment) return;
-    const r = await runAction('payments/check', {payment_id:pendingPayment.payment_id}, {progress:'Проверяем оплату…'});
-    if (['applied','confirmed','manual_review','canceled'].includes(r?.status)) {
-      $('pending-payment').hidden = true;
-      pendingPayment = null;
-    }
-  };
-  document.addEventListener('visibilitychange', async () => {
-    if (document.hidden || !pendingPayment || busy) return;
-    try {
-      const r = await api('payments/check', {
-        method: 'POST',
-        body: JSON.stringify({ payment_id: pendingPayment.payment_id }),
-      });
-      if (['applied','confirmed','manual_review','canceled'].includes(r?.status)) {
-        $('pending-payment').hidden = true;
-        pendingPayment = null;
-        if (r?.status === 'applied' || r?.status === 'confirmed') {
-          notify(r.message || 'Оплата подтверждена!');
-          await load();
-        }
-      }
-    } catch (_) {}
+  $('check-payment').onclick = () => verifyPendingPayment(false);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && pendingPayment && !busy) verifyPendingPayment(true);
   });
+
   if (!initData) {
-    setTimeout(() => {
-      $('loading').hidden = true;
-      $('locked').hidden = false;
-    }, 500);
+    setTimeout(() => showLockedScreen('auth'), 400);
   } else {
     load();
   }
